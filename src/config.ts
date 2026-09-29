@@ -3,6 +3,10 @@ export type Config = {
   dbPath: string;
   publicBaseUrl: string;
   openrouterApiKey?: string;
+  /** OpenRouter model id for the agent (OPENROUTER_MODEL); pinned to an Anthropic Claude model. */
+  openrouterModel: string;
+  /** Brave Search API key for the agent's web_search; DuckDuckGo HTML is used without it. */
+  braveApiKey?: string;
   oauthStateSecret: string;
   tokenEncryptionKey: string;
   /** Per-run transform time limit for saved/draft Pearls (SANDBOX_TIMEOUT_MS). */
@@ -10,6 +14,9 @@ export type Config = {
 };
 
 type Env = Record<string, string | undefined>;
+
+/** Current Anthropic Claude Sonnet on OpenRouter (verified in the /api/v1/models list 2026-09-29). */
+export const DEFAULT_OPENROUTER_MODEL = "anthropic/claude-sonnet-5.5";
 
 // Fixed, obviously-fake values used only when NODE_ENV=test so tests need no secrets.
 const TEST_SECRETS = {
@@ -33,6 +40,8 @@ export function loadConfig(env: Env = process.env): Config {
     dbPath: nonEmpty(env.DB_PATH) ?? (isTest ? ":memory:" : "data/oyster.db"),
     publicBaseUrl: (nonEmpty(env.PUBLIC_BASE_URL) ?? `http://localhost:${port}`).replace(/\/+$/, ""),
     openrouterApiKey: nonEmpty(env.OPENROUTER_API_KEY),
+    openrouterModel: nonEmpty(env.OPENROUTER_MODEL) ?? DEFAULT_OPENROUTER_MODEL,
+    braveApiKey: nonEmpty(env.BRAVE_API_KEY),
     oauthStateSecret: secret("OAUTH_STATE_SECRET"),
     tokenEncryptionKey: parseEncryptionKey(secret("TOKEN_ENCRYPTION_KEY")),
     sandboxTimeoutMs: parseSandboxTimeout(env.SANDBOX_TIMEOUT_MS),

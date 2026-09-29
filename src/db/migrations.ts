@@ -89,4 +89,17 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX oauth_state_nonces_expires_at ON oauth_state_nonces(expires_at);
     `,
   },
+  {
+    name: "chat_sessions",
+    sql: `
+      CREATE TABLE chat_sessions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        messages TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX chat_sessions_user_id ON chat_sessions(user_id);
+    `,
+  },
 ];

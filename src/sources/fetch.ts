@@ -134,6 +134,27 @@ async function runBuiltin(
 }
 
 async function getJson(url: string, auth: AuthCredential | null, deps: FetchSourcesDeps): Promise<unknown> {
+  const { text } = await guardedGet(url, auth, deps);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new SourceError("parse", `GET ${url} did not return valid JSON`);
+  }
+}
+
+export type GuardedGetDeps = Pick<FetchSourcesDeps, "fetch" | "timeoutMs" | "resolveHost">;
+
+/**
+ * SSRF-guarded GET (every redirect hop must be a public host) with one deadline
+ * for all hops and the body. `auth` is sent only to the original origin.
+ * Throws `SourceError`; messages never contain the credential.
+ */
+export async function guardedGet(
+  url: string,
+  auth: AuthCredential | null,
+  deps: GuardedGetDeps,
+  accept = "application/json",
+): Promise<{ text: string; contentType: string }> {
   const resolveHost = deps.resolveHost ?? resolveHostWithDns;
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
@@ -141,13 +162,12 @@ async function getJson(url: string, auth: AuthCredential | null, deps: FetchSour
   // and the body, and fires even when nothing else keeps the event loop alive.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  let text: string;
   try {
     let target = await assertPublicUrl(url, resolveHost);
     const authOrigin = target.origin;
     let response: Response;
     for (let redirects = 0; ; redirects++) {
-      const headers: Record<string, string> = { Accept: "application/json" };
+      const headers: Record<string, string> = { Accept: accept };
       // Like browsers, never forward the credential to a different origin.
       if (auth && target.origin === authOrigin) headers.Authorization = `Bearer ${auth.accessToken}`;
       response = await (deps.fetch ?? fetch)(target.href, {
@@ -166,7 +186,7 @@ async function getJson(url: string, auth: AuthCredential | null, deps: FetchSour
       await response.body?.cancel();
       throw new SourceError("http", `GET ${url} returned HTTP ${response.status}`);
     }
-    text = await response.text();
+    return { text: await response.text(), contentType: response.headers.get("content-type") ?? "" };
   } catch (error) {
     if (error instanceof SourceError) throw error;
     if (controller.signal.aborted) throw new SourceError("network", `GET ${url} timed out after ${timeoutMs}ms`);
@@ -174,10 +194,5 @@ async function getJson(url: string, auth: AuthCredential | null, deps: FetchSour
     throw new SourceError("network", `GET ${url} failed: ${message}`);
   } finally {
     clearTimeout(timer);
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new SourceError("parse", `GET ${url} did not return valid JSON`);
   }
 }

@@ -10,12 +10,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@openrouter/ai-sdk-provider": "^3.1.0",
+    "ai": "^7.0.122",
     "gtfs-realtime-bindings": "^2.2.0",
     "hono": "^4.13.11",
     "quickjs-emscripten": "^0.32.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@ai-sdk/provider": "4.0.19",
     "@types/bun": "^1.4.2",
     "typescript": "^7.0.2"
   }

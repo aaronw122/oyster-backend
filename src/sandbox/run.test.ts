@@ -62,6 +62,40 @@ describe("runTransform", () => {
     expect(message).toContain("stack overflow");
   });
 
+  test("hitting QuickJS's string size cap is reported as memory", async () => {
+    expectError(await runTransform(`() => { let s = "x"; for (;;) s = s + s; }`, {}, {}), "memory");
+  });
+
+  const deepObject = `let o = { value: "x" }, c = o; for (let i = 0; i < 3e4; i++) { c.n = {}; c = c.n; }`;
+
+  test("returning deeply nested output is a shape error and the sandbox stays usable", async () => {
+    const message = expectError(await runTransform(`() => { ${deepObject} return o; }`, {}, {}), "shape");
+    expect(message).toContain("nested more than 32 levels");
+    expect(await runTransform(`() => ({ value: "after" })`, {}, {})).toEqual({ ok: true, output: { value: "after" } });
+  });
+
+  test("a WASM abort during teardown resolves as a runtime failure, never a rejection", async () => {
+    // Stack overflow inside the transform's own JSON.stringify leaks QuickJS objects; freeing the runtime aborts.
+    const result = await runTransform(`() => { ${deepObject} JSON.stringify(o); return { value: "y" }; }`, {}, {});
+    expectError(result, "runtime");
+    expect(await runTransform(`() => ({ value: "after" })`, {}, {})).toEqual({ ok: true, output: { value: "after" } });
+  });
+
+  test("host-side marshalling failures resolve instead of rejecting", async () => {
+    const message = expectError(await runTransform(`() => ({ value: "x" })`, { big: 1n }, {}), "runtime");
+    expect(message).toContain("sandbox failure");
+  });
+
+  test("overwriting JSON/Array/InternalError globals cannot break output serialization", async () => {
+    const transform = `() => {
+      JSON.stringify = () => 42;
+      Array.isArray = () => true;
+      globalThis.InternalError = null;
+      return { value: "still ok", items: [{ label: "a" }] };
+    }`;
+    expect(await runTransform(transform, {}, {})).toEqual({ ok: true, output: { value: "still ok", items: [{ label: "a" }] } });
+  });
+
   test("an infinite loop times out near the budget", async () => {
     const started = performance.now();
     expectError(await runTransform(`() => { while (true) {} }`, {}, {}, { timeoutMs: 100 }), "timeout");

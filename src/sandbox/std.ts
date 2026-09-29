@@ -19,13 +19,21 @@ export const STD_SOURCE = String.raw`(function () {
     return 2 * EARTH_RADIUS_MILES * Math.asin(Math.min(1, Math.sqrt(s)));
   }
 
-  // Half away from zero, using exponent shifting to avoid 1.005 -> 1.00 drift.
+  // x * 10^e computed by editing the decimal exponent (no binary drift), and
+  // valid even when String(x) is already in exponent form ("1e-7", "1e+21").
+  function shiftDecimal(x, e) {
+    var parts = String(x).split("e");
+    return Number(parts[0] + "e" + (Number(parts[1] || 0) + e));
+  }
+
+  // Half away from zero, so 1.005 -> 1.01 and -2.5 -> -3.
   function round(n, digits) {
     var d = digits === undefined ? 0 : Math.trunc(digits);
     if (!Number.isFinite(n)) return n;
-    var sign = n < 0 ? -1 : 1;
-    var shifted = Math.round(Number(Math.abs(n) + "e" + d));
-    var result = sign * Number(shifted + "e" + -d);
+    var shifted = shiftDecimal(Math.abs(n), d);
+    // Beyond double precision there is no fractional part left to round.
+    if (!Number.isFinite(shifted) || shifted >= 9007199254740992) return n;
+    var result = (n < 0 ? -1 : 1) * shiftDecimal(Math.round(shifted), -d);
     return result === 0 ? 0 : result;
   }
 
@@ -33,9 +41,15 @@ export const STD_SOURCE = String.raw`(function () {
     if (!Number.isFinite(n)) return String(n);
     var decimals = opts && opts.decimals !== undefined ? Math.max(0, Math.trunc(opts.decimals)) : undefined;
     var abs = Math.abs(decimals === undefined ? n : round(n, decimals));
-    // Beyond 1e21 String/toFixed switch to exponent notation; print digits instead.
+    // String/toFixed use exponent notation beyond 1e21 and String below 1e-6; print plain digits instead.
     var text =
-      abs >= 1e21 ? BigInt(Math.round(abs)).toString() : decimals === undefined ? String(abs) : abs.toFixed(decimals);
+      abs >= 1e21
+        ? BigInt(Math.round(abs)).toString() + (decimals ? "." + "0".repeat(decimals) : "")
+        : decimals !== undefined
+          ? abs.toFixed(decimals)
+          : String(abs).indexOf("e") !== -1
+            ? abs.toFixed(20).replace(/\.?0+$/, "")
+            : String(abs);
     var dot = text.indexOf(".");
     var intPart = dot === -1 ? text : text.slice(0, dot);
     var fracPart = dot === -1 ? "" : text.slice(dot);
@@ -62,6 +76,13 @@ export const STD_SOURCE = String.raw`(function () {
     return chars.slice(0, max - 1).join("").trimEnd() + "…";
   }
 
+  // Finite numbers or non-empty numeric strings; anything else (null, "", objects) is NaN.
+  function coordinate(v) {
+    if (typeof v === "number") return v;
+    if (typeof v === "string" && v.trim() !== "") return Number(v);
+    return NaN;
+  }
+
   function coordsOf(item, key) {
     if (typeof key === "function") return key(item);
     if (item === null || typeof item !== "object") return null;
@@ -76,9 +97,9 @@ export const STD_SOURCE = String.raw`(function () {
     var bestDistance = Infinity;
     for (var i = 0; i < list.length; i++) {
       var c = coordsOf(list[i], key);
-      if (!c) continue;
-      var lat = Number(c.lat);
-      var lon = Number(c.lon);
+      if (c === null || typeof c !== "object") continue;
+      var lat = coordinate(c.lat);
+      var lon = coordinate(c.lon);
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
       var d = distance(point.lat, point.lon, lat, lon);
       if (d < bestDistance) {

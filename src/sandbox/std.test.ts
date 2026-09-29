@@ -28,8 +28,10 @@ describe("std (inside the VM)", () => {
         std.formatNumber(999),
         std.formatNumber(-0.001, { decimals: 2 }),
         std.formatNumber(1e21),
+        std.formatNumber(1e-7),
+        std.formatNumber(1e-7, { decimals: 2 }),
       ]`),
-    ).toEqual(["1,234,567", "1,234.57", "-9,876,543", "999", "0.00", "1,000,000,000,000,000,000,000"]);
+    ).toEqual(["1,234,567", "1,234.57", "-9,876,543", "999", "0.00", "1,000,000,000,000,000,000,000", "0.0000001", "0.00"]);
   });
 
   test("formatMoney uses the currency, two decimals, and a leading minus", async () => {
@@ -40,8 +42,10 @@ describe("std (inside the VM)", () => {
         std.formatMoney(0.1 + 0.2, "eur"),
         std.formatMoney(1e6, "CHF"),
         std.formatMoney(-0.001),
+        std.formatMoney(0.1 + 0.2 - 0.3),
+        std.formatMoney(1e21),
       ]`),
-    ).toEqual(["$1,234.50", "-$1,234.57", "€0.30", "CHF 1,000,000.00", "$0.00"]);
+    ).toEqual(["$1,234.50", "-$1,234.57", "€0.30", "CHF 1,000,000.00", "$0.00", "$0.00", "$1,000,000,000,000,000,000,000.00"]);
   });
 
   test("truncate counts code points and includes the ellipsis in n", async () => {
@@ -69,10 +73,28 @@ describe("std (inside the VM)", () => {
     ).toEqual(["near", "b", "b", null]);
   });
 
+  test("nearest skips items with null, empty, or non-numeric coordinates", async () => {
+    // null would coerce to (0, 0), which is right next to the point.
+    expect(
+      await evalStd(`std.nearest([
+        { id: "null", lat: null, lon: null },
+        { id: "empty", lat: "", lon: "" },
+        { id: "junk", lat: "n/a", lon: 0 },
+        { id: "real", lat: "10.5", lon: 10 },
+      ], { lat: 0.1, lon: 0.1 }).id`),
+    ).toBe("real");
+  });
+
   test("round uses half-away-from-zero and defaults to 0 digits", async () => {
     expect(await evalStd(`[std.round(2.5), std.round(-2.5), std.round(1.005, 2), std.round(1234.5678, 1), std.round(-0.4)]`)).toEqual([
       3, -3, 1.01, 1234.6, 0,
     ]);
+  });
+
+  test("round handles numbers whose string form uses exponent notation", async () => {
+    expect(
+      await evalStd(`[std.round(1e-7, 2), std.round(1.5e-7, 7), std.round(-1e-7, 2), std.round(1e21, 2), std.round(123456789.5e10, -3)]`),
+    ).toEqual([0, 2e-7, 0, 1e21, 1234567895000000000]);
   });
 
   test("std is frozen and pure", async () => {

@@ -7,3 +7,6 @@ coverage/
 *.db
 *.sqlite
 .DS_Store
+data/
+*.db-wal
+*.db-shm

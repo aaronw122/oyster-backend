@@ -3,7 +3,7 @@ import type { Database } from "bun:sqlite";
 import saveFixture from "../../fixtures/contract/save-pearl-request.json";
 import { PearlSchema, type SavePearlRequest, SavePearlRequestSchema } from "../contract/index.ts";
 import { openDb } from "../db/index.ts";
-import { PearlNotFoundError, PearlStore } from "./pearls.ts";
+import { PearlNotFoundError, PearlStore, VersionNotFoundError } from "./pearls.ts";
 import { UserStore } from "./users.ts";
 
 const body: SavePearlRequest = SavePearlRequestSchema.parse(saveFixture);
@@ -62,8 +62,33 @@ test("replaceTransform and rollback create new versions with the right transform
     [2, "() => ({ value: 'fixed' })", "repair: feed renamed field"],
     [3, body.transform, "rollback to v1"],
   ]);
-  expect(() => pearls.rollback(id, 9)).toThrow();
+  expect(() => pearls.rollback(id, 9)).toThrow(VersionNotFoundError);
+  expect(() => pearls.rollback("missing", 1)).toThrow(PearlNotFoundError);
   expect(() => pearls.replaceTransform("missing", "x", "r")).toThrow(PearlNotFoundError);
+  expect(pearls.getById(id)?.version).toBe(3);
+});
+
+test("rollback restores the version's full definition (transform, sources, inputs)", () => {
+  const { id } = pearls.create("alice", body);
+  const changed: SavePearlRequest = {
+    ...body,
+    name: "Weather",
+    inputs: { city: "NYC" },
+    sources: [{ id: "wx", url: "https://api.example/wx?q={inputs.city}", method: "GET" }],
+    transform: "(s) => ({ value: s.wx.temp })",
+  };
+  pearls.update("alice", id, changed);
+
+  const rolledBack = pearls.rollback(id, 1);
+  expect(rolledBack).toMatchObject({
+    version: 3,
+    name: "Weather",
+    transform: body.transform,
+    sources: body.sources,
+    inputs: body.inputs,
+  });
+  expect(pearls.listVersions(id).at(-1)).toMatchObject({ version: 3, reason: "rollback to v1" });
+  expect(pearls.rollback(id, 2)).toMatchObject({ version: 4, sources: changed.sources, inputs: changed.inputs });
 });
 
 test("setLastGood is reflected in get() per size and upserts", () => {

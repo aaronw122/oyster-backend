@@ -150,15 +150,24 @@ export class PearlStore {
       .all({ id });
   }
 
-  /** Restores `version`'s transform as a NEW version; history is never rewritten. */
+  /** Restores `version`'s transform, sources, and inputs as a NEW version; history is never rewritten. */
   rollback(id: string, version: number): Pearl {
-    const target = this.#db
-      .query<{ transform: string }, { id: string; version: number }>(
-        "SELECT transform FROM pearl_versions WHERE pearl_id = $id AND version = $version",
-      )
-      .get({ id, version });
-    if (!target) throw new Error(`Pearl ${id} has no version ${version}`);
-    return this.replaceTransform(id, target.transform, `rollback to v${version}`);
+    this.#db.transaction(() => {
+      this.#assertExists(id);
+      const now = isoNow();
+      const result = this.#db
+        .query(
+          `UPDATE pearls
+           SET transform = v.transform, sources = v.sources, inputs = v.inputs,
+               version = pearls.version + 1, updated_at = $now
+           FROM (SELECT transform, sources, inputs FROM pearl_versions WHERE pearl_id = $id AND version = $version) AS v
+           WHERE pearls.id = $id`,
+        )
+        .run({ id, version, now });
+      if (result.changes === 0) throw new VersionNotFoundError(id, version);
+      this.#appendVersion(id, `rollback to v${version}`, now);
+    })();
+    return this.#require(id);
   }
 
   recordRun(
@@ -224,5 +233,16 @@ export class PearlNotFoundError extends Error {
   constructor(readonly pearlId: string) {
     super(`Pearl ${pearlId} not found`);
     this.name = "PearlNotFoundError";
+  }
+}
+
+/** Thrown by `rollback` when the Pearl exists but has no such recorded version. */
+export class VersionNotFoundError extends Error {
+  constructor(
+    readonly pearlId: string,
+    readonly version: number,
+  ) {
+    super(`Pearl ${pearlId} has no version ${version}`);
+    this.name = "VersionNotFoundError";
   }
 }

@@ -32,8 +32,20 @@ export function loadConfig(env: Env = process.env): Config {
     publicBaseUrl: (nonEmpty(env.PUBLIC_BASE_URL) ?? `http://localhost:${port}`).replace(/\/+$/, ""),
     openrouterApiKey: nonEmpty(env.OPENROUTER_API_KEY),
     oauthStateSecret: secret("OAUTH_STATE_SECRET"),
-    tokenEncryptionKey: secret("TOKEN_ENCRYPTION_KEY"),
+    tokenEncryptionKey: parseEncryptionKey(secret("TOKEN_ENCRYPTION_KEY")),
   };
+}
+
+const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+/** TOKEN_ENCRYPTION_KEY must be standard base64 of exactly 32 bytes (an AES-256 key). */
+function parseEncryptionKey(value: string): string {
+  if (!BASE64.test(value) || Buffer.from(value, "base64").length !== 32) {
+    throw new Error(
+      "Invalid TOKEN_ENCRYPTION_KEY: expected base64 of exactly 32 bytes. Generate one with `openssl rand -base64 32`.",
+    );
+  }
+  return value;
 }
 
 function nonEmpty(value: string | undefined): string | undefined {

@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { loadConfig } from "./config.ts";
 
-const SECRETS = { OAUTH_STATE_SECRET: "s", TOKEN_ENCRYPTION_KEY: "k" };
+const KEY_32 = Buffer.alloc(32, 1).toString("base64");
+const SECRETS = { OAUTH_STATE_SECRET: "s", TOKEN_ENCRYPTION_KEY: KEY_32 };
 
 test("required secrets throw outside NODE_ENV=test", () => {
   expect(() => loadConfig({})).toThrow(/OAUTH_STATE_SECRET/);
@@ -9,9 +10,20 @@ test("required secrets throw outside NODE_ENV=test", () => {
   expect(() => loadConfig({ NODE_ENV: "production", ...SECRETS, OAUTH_STATE_SECRET: "  " })).toThrow(/OAUTH_STATE_SECRET/);
 });
 
+test("TOKEN_ENCRYPTION_KEY must be base64 of exactly 32 bytes", () => {
+  const withKey = (key: string) => () => loadConfig({ ...SECRETS, TOKEN_ENCRYPTION_KEY: key });
+  expect(withKey(Buffer.alloc(31).toString("base64"))).toThrow(/TOKEN_ENCRYPTION_KEY.*32 bytes/);
+  expect(withKey(Buffer.alloc(33).toString("base64"))).toThrow(/TOKEN_ENCRYPTION_KEY/);
+  expect(withKey("k")).toThrow(/TOKEN_ENCRYPTION_KEY/);
+  expect(withKey(`${KEY_32.slice(0, -2)}!=`)).toThrow(/TOKEN_ENCRYPTION_KEY/);
+  expect(() => loadConfig({ NODE_ENV: "test", TOKEN_ENCRYPTION_KEY: "short" })).toThrow(/TOKEN_ENCRYPTION_KEY/);
+  expect(loadConfig(SECRETS).tokenEncryptionKey).toBe(KEY_32);
+});
+
 test("NODE_ENV=test supplies secret defaults; explicit env wins", () => {
   const testConfig = loadConfig({ NODE_ENV: "test" });
   expect(testConfig.oauthStateSecret.length).toBeGreaterThan(0);
+  expect(Buffer.from(testConfig.tokenEncryptionKey, "base64")).toHaveLength(32);
   expect(testConfig.dbPath).toBe(":memory:");
   expect(loadConfig({ NODE_ENV: "test", OAUTH_STATE_SECRET: "real" }).oauthStateSecret).toBe("real");
 });

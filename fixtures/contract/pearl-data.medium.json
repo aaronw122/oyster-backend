@@ -1,0 +1,29 @@
+{
+  "pearlId": "pearl_01J8ZQ4K7M3CITIBIKE",
+  "version": 2,
+  "size": "medium",
+  "output": {
+    "value": "W 21st & 6th",
+    "subtitle": "5 docks · 0.2 mi",
+    "items": [
+      {
+        "label": "W 21 St & 6 Ave",
+        "value": "5 docks"
+      },
+      {
+        "label": "W 22 St & 8 Ave",
+        "value": "11 docks"
+      },
+      {
+        "label": "W 20 St & 7 Ave",
+        "value": "2 docks"
+      },
+      {
+        "label": "8 Ave & W 16 St",
+        "value": "0 docks"
+      }
+    ]
+  },
+  "updatedAt": "2026-09-29T12:42:10Z",
+  "stale": false
+}

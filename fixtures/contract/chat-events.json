@@ -1,0 +1,95 @@
+[
+  {
+    "type": "status",
+    "text": "Finding Citi Bike stations near your office"
+  },
+  {
+    "type": "question",
+    "id": "q_threshold",
+    "text": "How many open docks do you need?",
+    "options": [
+      "1",
+      "3",
+      "5"
+    ]
+  },
+  {
+    "type": "text",
+    "delta": "Got it — I'll show the closest station "
+  },
+  {
+    "type": "text",
+    "delta": "with at least 3 open docks."
+  },
+  {
+    "type": "preview",
+    "previews": {
+      "inline": {
+        "value": "W 21st & 6th"
+      },
+      "rectangular": {
+        "value": "W 21st & 6th",
+        "subtitle": "5 docks · 0.2 mi"
+      },
+      "small": {
+        "value": "W 21st & 6th",
+        "subtitle": "5 docks · 0.2 mi",
+        "items": [
+          {
+            "label": "W 21 St & 6 Ave",
+            "value": "5 docks"
+          },
+          {
+            "label": "W 22 St & 8 Ave",
+            "value": "11 docks"
+          }
+        ]
+      },
+      "medium": {
+        "value": "W 21st & 6th",
+        "subtitle": "5 docks · 0.2 mi",
+        "items": [
+          {
+            "label": "W 21 St & 6 Ave",
+            "value": "5 docks"
+          },
+          {
+            "label": "W 22 St & 8 Ave",
+            "value": "11 docks"
+          },
+          {
+            "label": "W 20 St & 7 Ave",
+            "value": "2 docks"
+          },
+          {
+            "label": "8 Ave & W 16 St",
+            "value": "0 docks"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "saved",
+    "pearl": {
+      "id": "pearl_01J8ZQ4K7M3CITIBIKE",
+      "name": "Citi Bike docks near work"
+    }
+  },
+  {
+    "type": "oauth",
+    "provider": "plaid",
+    "url": "https://oyster.example.com/oauth/plaid/start?state=eyJzIjoic2Vzc19kZW1vIn0.c2lnbmF0dXJl"
+  },
+  {
+    "type": "unavailable",
+    "text": "I couldn't find a free public source for Resy table availability, so I can't build that widget."
+  },
+  {
+    "type": "error",
+    "text": "Something went wrong on our end. Please try again."
+  },
+  {
+    "type": "done"
+  }
+]

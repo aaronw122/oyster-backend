@@ -1,0 +1,104 @@
+{
+  "id": "pearl_01J8ZQ4K7M3CITIBIKE",
+  "name": "Citi Bike docks near work",
+  "userId": "user_01J8ZPX2A9AARON",
+  "inputs": {
+    "stations": [
+      {
+        "id": "6140.05",
+        "label": "W 21st & 6th",
+        "distanceMi": 0.2
+      },
+      {
+        "id": "6331.01",
+        "label": "W 22nd & 8th",
+        "distanceMi": 0.3
+      },
+      {
+        "id": "6064.08",
+        "label": "W 20th & 7th",
+        "distanceMi": 0.4
+      },
+      {
+        "id": "6072.06",
+        "label": "8th & W 16th",
+        "distanceMi": 0.5
+      }
+    ],
+    "threshold": 3
+  },
+  "sources": [
+    {
+      "id": "citibike",
+      "builtin": "gbfs",
+      "params": {
+        "system": "citibike-nyc"
+      },
+      "method": "GET"
+    }
+  ],
+  "transform": "(sources, inputs) => {\n  const feed = sources.citibike;\n  const rows = inputs.stations\n    .map((s) => ({ ...s, live: feed.stations[s.id] }))\n    .filter((r) => r.live && r.live.isReturning);\n  const pick = rows.find((r) => r.live.docksAvailable >= inputs.threshold);\n  const items = rows.map((r) => ({ label: r.live.name, value: r.live.docksAvailable + \" docks\" }));\n  if (!pick) {\n    return { value: \"No docks\", subtitle: \"None nearby with \" + inputs.threshold + \"+ docks\", items };\n  }\n  return {\n    value: pick.label,\n    subtitle: pick.live.docksAvailable + \" docks · \" + pick.distanceMi + \" mi\",\n    items,\n  };\n}",
+  "version": 2,
+  "lastGood": {
+    "inline": {
+      "output": {
+        "value": "W 21st & 6th"
+      },
+      "version": 2,
+      "updatedAt": "2026-09-29T12:42:10Z"
+    },
+    "rectangular": {
+      "output": {
+        "value": "W 21st & 6th",
+        "subtitle": "5 docks · 0.2 mi"
+      },
+      "version": 2,
+      "updatedAt": "2026-09-29T12:42:10Z"
+    },
+    "small": {
+      "output": {
+        "value": "W 21st & 6th",
+        "subtitle": "5 docks · 0.2 mi",
+        "items": [
+          {
+            "label": "W 21 St & 6 Ave",
+            "value": "5 docks"
+          },
+          {
+            "label": "W 22 St & 8 Ave",
+            "value": "11 docks"
+          }
+        ]
+      },
+      "version": 2,
+      "updatedAt": "2026-09-29T12:42:10Z"
+    },
+    "medium": {
+      "output": {
+        "value": "W 21st & 6th",
+        "subtitle": "5 docks · 0.2 mi",
+        "items": [
+          {
+            "label": "W 21 St & 6 Ave",
+            "value": "5 docks"
+          },
+          {
+            "label": "W 22 St & 8 Ave",
+            "value": "11 docks"
+          },
+          {
+            "label": "W 20 St & 7 Ave",
+            "value": "2 docks"
+          },
+          {
+            "label": "8 Ave & W 16 St",
+            "value": "0 docks"
+          }
+        ]
+      },
+      "version": 2,
+      "updatedAt": "2026-09-29T12:42:10Z"
+    }
+  },
+  "status": "ok"
+}

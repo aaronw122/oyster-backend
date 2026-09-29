@@ -1,0 +1,16 @@
+data: {"type":"status","text":"Finding Citi Bike stations near your office"}
+
+data: {"type":"text","delta":"I found four stations within half a mile. "}
+
+data: {"type":"text","delta":"I'll show the closest one with at least 3 open docks."}
+
+data: {"type":"status","text":"Checking live dock counts"}
+
+data: {"type":"preview","previews":{"inline":{"value":"W 21st & 6th"},"rectangular":{"value":"W 21st & 6th","subtitle":"5 docks · 0.2 mi"},"small":{"value":"W 21st & 6th","subtitle":"5 docks · 0.2 mi","items":[{"label":"W 21 St & 6 Ave","value":"5 docks"},{"label":"W 22 St & 8 Ave","value":"11 docks"}]},"medium":{"value":"W 21st & 6th","subtitle":"5 docks · 0.2 mi","items":[{"label":"W 21 St & 6 Ave","value":"5 docks"},{"label":"W 22 St & 8 Ave","value":"11 docks"},{"label":"W 20 St & 7 Ave","value":"2 docks"},{"label":"8 Ave & W 16 St","value":"0 docks"}]}}}
+
+data: {"type":"saved","pearl":{"id":"pearl_01J8ZQ4K7M3CITIBIKE","name":"Citi Bike docks near work"}}
+
+data: {"type":"text","delta":"Saved! Add it from your Lock Screen or Home Screen."}
+
+data: {"type":"done"}
+

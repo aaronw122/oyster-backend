@@ -1,0 +1,30 @@
+{
+  "inline": {
+    "value": 12,
+    "subtitle": null,
+    "items": null
+  },
+  "rectangular": {
+    "value": 12,
+    "subtitle": 24,
+    "items": null
+  },
+  "small": {
+    "value": 16,
+    "subtitle": 28,
+    "items": {
+      "max": 2,
+      "label": 22,
+      "value": 10
+    }
+  },
+  "medium": {
+    "value": 20,
+    "subtitle": 40,
+    "items": {
+      "max": 5,
+      "label": 22,
+      "value": 10
+    }
+  }
+}

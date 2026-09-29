@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "pearl_not_found",
+    "message": "No Pearl with that id belongs to this account."
+  }
+}

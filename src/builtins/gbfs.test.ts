@@ -140,6 +140,17 @@ describe("gbfs builtin: normalization", () => {
     expect((error as SourceError).kind).toBe("http");
   });
 
+  test("feed URLs on another origin are refused before any request", async () => {
+    const directory = clone(v2Discovery);
+    const status = directory.data.en.feeds.find((feed) => feed.name === "station_status")!;
+    status.url = "http://169.254.169.254/latest/meta-data/station_status.json";
+    const { fn, calls } = fakeFetch({ ...v2, [GBFS_SYSTEMS.citibike.discoveryUrl]: directory });
+    const error = await gbfs.fetch(gbfs.params.parse({}), ctx(fn)).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(SourceError);
+    expect((error as SourceError).kind).toBe("forbidden_url");
+    expect(calls).toEqual([GBFS_SYSTEMS.citibike.discoveryUrl]);
+  });
+
   test("unknown systems are rejected as invalid params", async () => {
     const result = await fetchSources(
       { inputs: {}, sources: [{ id: "bike", builtin: "gbfs", params: { system: "nowhere" }, method: "GET" }] },
@@ -204,6 +215,12 @@ describe("gbfs example Pearl", () => {
     expect(output.value).toBe("No docks");
     expect(output.subtitle).toBe("None with 3+ open");
     expect(output.items).toHaveLength(4);
+  });
+
+  test("tells the user to recreate when every stored station is gone from the feed", async () => {
+    const stored = new Set(gbfsExample.inputs.stations.map((station) => station.id));
+    const output = await runExample(withStatus((row) => (stored.has(row.station_id) ? null : row)));
+    expect(output).toEqual({ value: "No stations", subtitle: "Recreate this widget" });
   });
 
   test("max-length labels, big numbers, and a station gone from the feed still fit", async () => {

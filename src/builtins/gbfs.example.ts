@@ -39,6 +39,10 @@ export const gbfsExample = {
   var rows = inputs.stations
     .filter(function (c) { return live[c.id]; })
     .map(function (c) { return { label: c.label, distanceMi: c.distanceMi, s: live[c.id] }; });
+  if (rows.length === 0) {
+    // Every stored station left the feed (removed or re-numbered): refreshes can't recover.
+    return { value: "No stations", subtitle: "Recreate this widget" };
+  }
   function open(r) { return r.s.isInstalled && r.s.isReturning; }
   function docks(n) { return n === 1 ? "1 dock" : n + " docks"; }
   function items(except) {

@@ -20,6 +20,7 @@ const SYSTEM_IDS = Object.keys(GBFS_SYSTEMS) as [SystemId, ...SystemId[]];
 
 const REQUEST_TIMEOUT_MS = 8_000;
 const ELECTRIC_PROPULSION: Record<string, true> = { electric_assist: true, electric: true };
+const USED_FEEDS: Record<string, true> = { station_information: true, station_status: true, vehicle_types: true };
 
 export type GbfsStation = {
   id: string;
@@ -65,8 +66,9 @@ export const gbfs: Builtin = {
   async fetch(rawParams, ctx) {
     const system = rawParams.system as SystemId;
     const wanted = parseStationIds(rawParams.stations);
-    const discovery = await getFeed(GBFS_SYSTEMS[system].discoveryUrl, "system directory", ctx);
-    const feeds = feedUrls(discovery.data);
+    const directoryUrl = GBFS_SYSTEMS[system].discoveryUrl;
+    const discovery = await getFeed(directoryUrl, "system directory", ctx);
+    const feeds = feedUrls(discovery.data, new URL(directoryUrl).origin);
     const infoUrl = feeds.get("station_information");
     const statusUrl = feeds.get("station_status");
     if (!infoUrl || !statusUrl) {
@@ -113,6 +115,8 @@ async function getFeed(url: string, what: string, ctx: BuiltinContext): Promise<
   try {
     response = await ctx.fetch(url, {
       headers: { Accept: "application/json" },
+      // Never follow redirects: the same-origin check in `feedUrls` must hold for the host actually read.
+      redirect: "error",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
@@ -137,18 +141,28 @@ async function getFeed(url: string, what: string, ctx: BuiltinContext): Promise<
   return feed;
 }
 
-/** 2.x: `data.<lang>.feeds` (prefer `en`); 3.x: `data.feeds`. */
-function feedUrls(data: Row): Map<string, string> {
+/**
+ * 2.x: `data.<lang>.feeds` (prefer `en`); 3.x: `data.feeds`. Only the feeds this
+ * builtin reads are returned, and each must live on the directory's own origin:
+ * builtin fetches bypass the URL-source SSRF guard, so a tampered directory
+ * must not be able to point us anywhere else.
+ */
+function feedUrls(data: Row, origin: string): Map<string, string> {
   let feeds = data.feeds;
   if (!Array.isArray(feeds)) {
     const language = isRow(data.en) ? data.en : Object.values(data).find(isRow);
     feeds = language?.feeds;
   }
   const urls = new Map<string, string>();
-  if (Array.isArray(feeds)) {
-    for (const feed of feeds) {
-      if (isRow(feed) && typeof feed.name === "string" && typeof feed.url === "string") urls.set(feed.name, feed.url);
+  if (!Array.isArray(feeds)) return urls;
+  for (const feed of feeds) {
+    if (!isRow(feed) || typeof feed.name !== "string" || typeof feed.url !== "string") continue;
+    if (!Object.hasOwn(USED_FEEDS, feed.name)) continue;
+    const url = URL.parse(feed.url);
+    if (url?.origin !== origin) {
+      throw new SourceError("forbidden_url", "the bike-share system directory points to an untrusted host");
     }
+    urls.set(feed.name, url.href);
   }
   return urls;
 }

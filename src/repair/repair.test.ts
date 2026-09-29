@@ -169,6 +169,25 @@ describe("repair", () => {
     for (const value of ["4821", "4,821", "5310", "5,310", "Jane", "Quinn", "6789"]) expect(told).not.toContain(value);
   });
 
+  test("repair redacts a sensitive-provider source even when the hook says it isn't sensitive", async () => {
+    env.services.oauth?.tokens.save("alice", "bank", { accessToken: "tok-secret-123" });
+    const body: SavePearlRequest = {
+      name: "Checking",
+      inputs: {},
+      sources: [{ id: "b", url: "https://bank.test/balance", method: "GET", auth: { provider: "bank" } }],
+      transform: `(s, inputs, std) => ({ value: std.formatMoney(s.b.account.balance), subtitle: s.b.account.owner })`,
+    };
+    env.payload.current = { account: { balance: 4821.37, owner: "Jane Quinn" } };
+    const pearl = await save(body);
+    env.payload.current = { acct: { balance: 5310.02, owner: "Jane Quinn" } };
+    const model = scriptedModel([{ text: "Giving up." }]);
+    const failure = { stage: "transform" as const, message: "broken", detail: "transform failed (runtime): no account" };
+    await createRepairer(env.services, { model })(pearl, failure, { sensitive: false });
+    const told = modelVisible(model);
+    expect(told).toContain("acct.balance: number");
+    for (const value of ["5310", "5,310", "Jane", "Quinn", "tok-secret-123"]) expect(told).not.toContain(value);
+  });
+
   test("while a repair runs the Pearl is 'repairing' and refreshes still serve last-good", async () => {
     env.payload.current = { current: { temp: 72, cond: "Sunny" } };
     const pearl = await save(weather);

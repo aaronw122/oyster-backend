@@ -1,6 +1,6 @@
 import { type Pearl, SIZES, type Size, type WidgetOutput } from "../contract/index.ts";
 import { fitAllSizes, type FitResult, runTransform } from "../sandbox/index.ts";
-import { type Builtin, getBuiltin } from "../sources/builtins.ts";
+import { type Builtin, getBuiltin, listBuiltins } from "../sources/builtins.ts";
 import {
   type AuthResolver,
   fetchSources,
@@ -19,9 +19,10 @@ export type DraftPearl = Pick<Pearl, "sources" | "inputs" | "transform">;
  */
 export type RunFailure = { stage: "fetch" | "transform" | "fit"; message: string; detail: string; sizes?: Size[] };
 
+/** A failed run. `output` is the raw transform output when only the fit stage failed, so the agent can see what overflowed. */
 export type DraftRun =
   | { ok: true; output: WidgetOutput; previews: Record<Size, WidgetOutput>; sensitive: boolean }
-  | { ok: false; failure: RunFailure; sensitive: boolean };
+  | { ok: false; failure: RunFailure; sensitive: boolean; output?: WidgetOutput };
 
 export type RuntimeDeps = {
   pearls: PearlStore;
@@ -105,7 +106,7 @@ export async function runDraft(userId: string, draft: DraftPearl, deps: RuntimeD
   const run = await execute(userId, draft, deps);
   if (!run.ok) return { ok: false, failure: run.failure, sensitive };
   const failure = fitFailure(run.fits, SIZES);
-  if (failure) return { ok: false, failure, sensitive };
+  if (failure) return { ok: false, failure, output: run.output, sensitive };
   const previews = Object.fromEntries(
     SIZES.map((size) => {
       const fit = run.fits[size];
@@ -116,16 +117,28 @@ export async function runDraft(userId: string, draft: DraftPearl, deps: RuntimeD
   return { ok: true, output: run.output, previews, sensitive };
 }
 
-/** True when any source is marked sensitive or uses a builtin marked sensitive (e.g. Plaid). */
-export function isSensitive(draft: DraftPearl, deps: RuntimeDeps): boolean {
+/**
+ * The single sensitivity rule: a source is sensitive when it is marked
+ * sensitive, uses a builtin marked sensitive (e.g. Plaid), or authenticates with
+ * a sensitive sign-in provider.
+ */
+export function isSensitive(draft: Pick<DraftPearl, "sources">, deps: Pick<RuntimeDeps, "builtins">): boolean {
   return draft.sources.some((source) => {
     if (source.sensitive === true) return true;
-    if (source.builtin === undefined) return false;
-    const builtin = deps.builtins
-      ? deps.builtins.find((candidate) => candidate.name === source.builtin)
-      : getBuiltin(source.builtin);
-    return builtin?.sensitive === true;
+    if (source.builtin !== undefined) {
+      const builtin = deps.builtins
+        ? deps.builtins.find((candidate) => candidate.name === source.builtin)
+        : getBuiltin(source.builtin);
+      if (builtin?.sensitive === true) return true;
+    }
+    return isSensitiveProvider(source.auth?.provider, deps);
   });
+}
+
+/** True for sign-in providers whose data is sensitive: some builtin using that provider is marked sensitive. */
+export function isSensitiveProvider(provider: string | undefined, deps: Pick<RuntimeDeps, "builtins">): boolean {
+  if (provider === undefined) return false;
+  return (deps.builtins ?? listBuiltins()).some((builtin) => builtin.auth?.provider === provider && builtin.sensitive === true);
 }
 
 const SIZE_NAMES: Record<Size, string> = {

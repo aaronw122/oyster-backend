@@ -2,9 +2,8 @@ export { getPearlData, previewPearl, type RuntimeError, savePearl } from "./pear
 export {
   type DraftPearl,
   type DraftRun,
-  type Execution,
-  execute,
   isSensitive,
+  isSensitiveProvider,
   nullAuthResolverFor,
   type RunFailure,
   runDraft,

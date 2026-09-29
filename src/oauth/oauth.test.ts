@@ -94,7 +94,7 @@ describe("oauth2Adapter", () => {
       redirectUri: "https://srv/cb",
       codeVerifier: "verifier",
     });
-    expect(token).toEqual({ accessToken: "at-1", refreshToken: "rt-1", expiresAt: new Date(T0 + 3_600_000).toISOString() });
+    expect(token).toEqual({ accessToken: "at-1", refreshToken: "rt-1", expiresAt: "2026-09-29T13:00:00Z" });
     expect(calls[0]?.headers.get("content-type")).toBe("application/x-www-form-urlencoded");
     expect(Object.fromEntries(calls[0]?.body ?? [])).toEqual({
       grant_type: "authorization_code",
@@ -139,9 +139,10 @@ describe("oauth2Adapter", () => {
 
   test("refresh keeps the old refresh token when the provider omits it", async () => {
     const { calls, fetchFn } = fakeTokenEndpoint([{ json: { access_token: "at-2", expires_in: 60 } }]);
-    const adapter = oauth2Adapter({ ...baseCfg, fetch: fetchFn, now: () => T0 });
+    // A mid-second clock still yields a whole-second contract timestamp.
+    const adapter = oauth2Adapter({ ...baseCfg, fetch: fetchFn, now: () => T0 + 250 });
     const fresh = await adapter.refresh?.({ accessToken: "at-1", refreshToken: "rt-1" });
-    expect(fresh).toEqual({ accessToken: "at-2", refreshToken: "rt-1", expiresAt: new Date(T0 + 60_000).toISOString() });
+    expect(fresh).toEqual({ accessToken: "at-2", refreshToken: "rt-1", expiresAt: "2026-09-29T12:01:00Z" });
     expect(calls[0]?.body.get("grant_type")).toBe("refresh_token");
     expect(calls[0]?.body.get("refresh_token")).toBe("rt-1");
   });

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isoNow } from "../contract/index.ts";
 import type { Builtin, BuiltinContext } from "../sources/builtins.ts";
 import { SourceError } from "../sources/types.ts";
 
@@ -63,6 +64,10 @@ export const gbfs: Builtin = {
     "docksAvailable = empty docks to return a bike; bikesAvailable includes e-bikes.",
   ].join(" "),
   params,
+  // Normalized result, per system + stations. Raw feeds are cached separately for
+  // their advertised `ttl` (shared across station selections); feed ttls vary, so
+  // this stays short.
+  ttlMs: 30_000,
   async fetch(rawParams, ctx) {
     const system = rawParams.system as SystemId;
     const wanted = parseStationIds(rawParams.stations);
@@ -225,7 +230,7 @@ function localizedText(value: unknown): string | null {
 function toIso(value: unknown): string | null {
   const date =
     typeof value === "number" ? new Date(value * 1000) : typeof value === "string" ? new Date(value) : null;
-  return date && Number.isFinite(date.getTime()) ? date.toISOString() : null;
+  return date && Number.isFinite(date.getTime()) ? isoNow(date) : null;
 }
 
 function count(value: unknown): number {

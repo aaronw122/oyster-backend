@@ -67,7 +67,7 @@ describe("gbfs builtin: normalization", () => {
     const result = await run(v2);
     expect(result.system).toBe("citibike");
     expect(result.ttl).toBe(v2Status.ttl);
-    expect(result.lastUpdated).toBe(new Date(v2Status.last_updated * 1000).toISOString());
+    expect(result.lastUpdated).toBe("2026-09-29T19:39:44Z");
     // The two feeds list stations in different orders; every joined row must carry its own status.
     expect(result.stations.map((s) => s.id)).toEqual(v2Info.data.stations.map((s) => s.station_id));
     for (const station of result.stations) {
@@ -87,7 +87,7 @@ describe("gbfs builtin: normalization", () => {
       isRenting: true,
       isReturning: true,
       isInstalled: true,
-      lastReported: new Date(1790710757 * 1000).toISOString(),
+      lastReported: "2026-09-29T19:39:17Z",
     });
   });
 
@@ -107,6 +107,15 @@ describe("gbfs builtin: normalization", () => {
     const [fromV2, fromV3] = await Promise.all([run(v2), run(v3)]);
     // 3.x has no num_ebikes_available: e-bikes come from vehicle_types propulsion.
     expect(fromV3).toEqual(fromV2);
+  });
+
+  test("timestamps are whole-second UTC even when the feed sends fractions", async () => {
+    const status = clone(v3Status);
+    status.last_updated = "2026-09-29T19:39:44.789Z";
+    status.data.stations = status.data.stations.map((row) => ({ ...row, last_reported: "2026-09-29T15:39:17.250-04:00" }));
+    const result = await run({ ...v3, "https://gbfs.lyft.com/gbfs/3.0/bkn/station_status.json": status }, { stations: W21_6 });
+    expect(result.lastUpdated).toBe("2026-09-29T19:39:44Z");
+    expect(result.stations[0]?.lastReported).toBe("2026-09-29T19:39:17Z");
   });
 
   test("status flags map 0/1 to booleans", async () => {

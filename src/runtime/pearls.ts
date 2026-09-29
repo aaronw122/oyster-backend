@@ -23,10 +23,10 @@ export async function savePearl(
   body: SavePearlRequest,
   deps: RuntimeDeps,
   existingId?: string,
-): Promise<{ ok: true; pearl: Pearl } | { ok: false; failure: RunFailure } | { ok: false; notFound: true }> {
+): Promise<{ ok: true; pearl: Pearl } | { ok: false; failure: RunFailure; sensitive: boolean } | { ok: false; notFound: true }> {
   if (existingId !== undefined && !deps.pearls.get(userId, existingId)) return { ok: false, notFound: true };
   const run = await runDraft(userId, body, deps);
-  if (!run.ok) return { ok: false, failure: run.failure };
+  if (!run.ok) return { ok: false, failure: run.failure, sensitive: run.sensitive };
 
   const pearl = deps.pearls.transaction(() => {
     const saved = existingId === undefined ? deps.pearls.create(userId, body) : deps.pearls.update(userId, existingId, body);

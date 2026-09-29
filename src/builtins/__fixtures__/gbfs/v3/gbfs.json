@@ -1,0 +1,21 @@
+{
+  "last_updated": "2026-09-29T19:40:41Z",
+  "ttl": 60,
+  "version": "3.0",
+  "data": {
+    "feeds": [
+      {
+        "name": "station_information",
+        "url": "https://gbfs.lyft.com/gbfs/3.0/bkn/station_information.json"
+      },
+      {
+        "name": "station_status",
+        "url": "https://gbfs.lyft.com/gbfs/3.0/bkn/station_status.json"
+      },
+      {
+        "name": "vehicle_types",
+        "url": "https://gbfs.lyft.com/gbfs/3.0/bkn/vehicle_types.json"
+      }
+    ]
+  }
+}

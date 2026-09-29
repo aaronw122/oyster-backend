@@ -1,0 +1,149 @@
+{
+  "data": {
+    "stations": [
+      {
+        "station_id": "66dc2995-0aca-11e7-82f6-3863bb44ef7c",
+        "name": "W 25 St & 6 Ave",
+        "short_name": "6215.04",
+        "lon": -73.99144871,
+        "lat": 40.74395411,
+        "region_id": "71",
+        "capacity": 51,
+        "rental_uris": {
+          "android": "https://bkn.lft.to/lastmile_qr_scan",
+          "ios": "https://bkn.lft.to/lastmile_qr_scan"
+        },
+        "is_charging": false
+      },
+      {
+        "station_id": "66dc120f-0aca-11e7-82f6-3863bb44ef7c",
+        "name": "W 21 St & 6 Ave",
+        "short_name": "6140.05",
+        "lon": -73.99415556,
+        "lat": 40.74173969,
+        "region_id": "71",
+        "capacity": 74,
+        "rental_uris": {
+          "android": "https://bkn.lft.to/lastmile_qr_scan",
+          "ios": "https://bkn.lft.to/lastmile_qr_scan"
+        },
+        "is_charging": false
+      },
+      {
+        "station_id": "5f7ac86c-1a98-4603-8749-4bb83ac84acd",
+        "name": "Broadway & E 21 St",
+        "short_name": "6098.10",
+        "lon": -73.98958593606949,
+        "lat": 40.739888408589955,
+        "region_id": "71",
+        "capacity": 54,
+        "rental_uris": {
+          "android": "https://bkn.lft.to/lastmile_qr_scan",
+          "ios": "https://bkn.lft.to/lastmile_qr_scan"
+        },
+        "is_charging": false
+      },
+      {
+        "station_id": "66db33fc-0aca-11e7-82f6-3863bb44ef7c",
+        "name": "W 18 St & 6 Ave",
+        "short_name": "6064.08",
+        "lon": -73.99456405,
+        "lat": 40.73971301,
+        "region_id": "71",
+        "capacity": 69,
+        "rental_uris": {
+          "android": "https://bkn.lft.to/lastmile_qr_scan",
+          "ios": "https://bkn.lft.to/lastmile_qr_scan"
+        },
+        "is_charging": false
+      },
+      {
+        "station_id": "daefc84c-1b16-4220-8e1f-10ea4866fdc7",
+        "name": "Broadway & W 25 St",
+        "short_name": "6173.08",
+        "lon": -73.98918628692627,
+        "lat": 40.74286877312112,
+        "region_id": "71",
+        "capacity": 109,
+        "rental_uris": {
+          "android": "https://bkn.lft.to/lastmile_qr_scan",
+          "ios": "https://bkn.lft.to/lastmile_qr_scan"
+        },
+        "is_charging": false
+      },
+      {
+        "station_id": "66dc1c5c-0aca-11e7-82f6-3863bb44ef7c",
+        "name": "W 24 St & 7 Ave",
+        "short_name": "6257.03",
+        "lon": -73.99529885,
+        "lat": 40.74487634,
+        "region_id": "71",
+        "capacity": 79,
+        "rental_uris": {
+          "android": "https://bkn.lft.to/lastmile_qr_scan",
+          "ios": "https://bkn.lft.to/lastmile_qr_scan"
+        },
+        "is_charging": false
+      },
+      {
+        "station_id": "66db95e5-0aca-11e7-82f6-3863bb44ef7c",
+        "name": "W 20 St & 7 Ave",
+        "short_name": "6182.02",
+        "lon": -73.99726235,
+        "lat": 40.74238787,
+        "region_id": "71",
+        "capacity": 44,
+        "rental_uris": {
+          "android": "https://bkn.lft.to/lastmile_qr_scan",
+          "ios": "https://bkn.lft.to/lastmile_qr_scan"
+        },
+        "is_charging": false
+      },
+      {
+        "station_id": "1794096976946852066",
+        "name": "W 27 St & 6 Ave",
+        "short_name": "6215.07",
+        "lon": -73.99062,
+        "lat": 40.74526,
+        "region_id": "71",
+        "capacity": 66,
+        "rental_uris": {
+          "android": "https://bkn.lft.to/lastmile_qr_scan",
+          "ios": "https://bkn.lft.to/lastmile_qr_scan"
+        },
+        "is_charging": false
+      },
+      {
+        "station_id": "2e74ea1d-02a0-47bf-9665-dce2d65de8d7",
+        "name": "W 17 St & 7 Ave",
+        "short_name": "6107.08",
+        "lon": -73.99852573871613,
+        "lat": 40.740564236339516,
+        "region_id": "71",
+        "capacity": 47,
+        "rental_uris": {
+          "android": "https://bkn.lft.to/lastmile_qr_scan",
+          "ios": "https://bkn.lft.to/lastmile_qr_scan"
+        },
+        "is_charging": false
+      },
+      {
+        "station_id": "3d340fc5-8c86-4d5e-974d-ae28958e61e8",
+        "name": "W 20 St & 5 Ave",
+        "short_name": "6098.02",
+        "lon": -73.99103969335556,
+        "lat": 40.73972989238724,
+        "region_id": "71",
+        "capacity": 57,
+        "rental_uris": {
+          "android": "https://bkn.lft.to/lastmile_qr_scan",
+          "ios": "https://bkn.lft.to/lastmile_qr_scan"
+        },
+        "is_charging": false
+      }
+    ]
+  },
+  "last_updated": 1790710782,
+  "ttl": 60,
+  "version": "2.3"
+}

@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { Hono } from "hono";
+import type { AgentServices } from "../agent/tools.ts";
 import type { Config } from "../config.ts";
 import type { OAuthDeps } from "../oauth/index.ts";
 import type { RuntimeDeps } from "../runtime/index.ts";
@@ -9,6 +10,7 @@ import { requireAuth } from "./auth.ts";
 import { apiError } from "./errors.ts";
 import { healthRoutes } from "./routes/health.ts";
 import { dataRoutes } from "./routes/data.ts";
+import { messagesRoutes } from "./routes/messages.ts";
 import { oauthRoutes } from "./routes/oauth.ts";
 import { pearlsRoutes } from "./routes/pearls.ts";
 
@@ -19,6 +21,8 @@ export type AppDeps = {
   users: UserStore;
   runtime: RuntimeDeps;
   oauth?: OAuthDeps;
+  /** Agent tool services; defaults to runtime/pearls/oauth/config above with the OpenRouter model. */
+  agent?: AgentServices;
 };
 export type AppEnv = { Variables: { userId: string } };
 
@@ -35,6 +39,7 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   app.route("/", healthRoutes(deps));
   app.route("/pearls", pearlsRoutes(deps));
   app.route("/pearls", dataRoutes(deps));
+  app.route("/messages", messagesRoutes(deps));
   // Unauthenticated: identity comes from the signed, single-use OAuth `state`.
   if (deps.oauth) app.route("/oauth", oauthRoutes({ ...deps, oauth: deps.oauth }));
 

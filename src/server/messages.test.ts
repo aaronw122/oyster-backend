@@ -151,3 +151,41 @@ describe("POST /messages", () => {
     expect(signal.aborted).toBe(true);
   });
 });
+
+describe("POST /messages over a real server", () => {
+  test("a turn that stays silent past the idle timeout keeps its stream open, pings, and ends with done", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        // Real delay on purpose: the behavior under test is Bun.serve's wall-clock idle timeout,
+        // which fires about 4s after the last write even with idleTimeout: 1.
+        await Bun.sleep(5_000);
+        return scriptedModel([{ text: "Still here." }]).doStream({ prompt: [] });
+      },
+    });
+    const app = createApp({
+      config: TEST_CONFIG,
+      db: env.db,
+      pearls: env.pearls,
+      users: env.users,
+      runtime: env.services.runtime,
+      agent: { ...env.services, model },
+      ssePingIntervalMs: 200,
+    });
+    const server = Bun.serve({ port: 0, fetch: app.fetch, idleTimeout: 1 });
+    try {
+      const res = await fetch(new URL("/messages", server.url), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${alice}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: "s1", message: "hi" }),
+      });
+      const body = await res.text();
+      expect(body).toContain(": ping\n\n");
+      const frames = body.split("\n\n").filter((frame) => frame.startsWith("data: "));
+      const stream = frames.map((frame) => ChatEventSchema.parse(JSON.parse(frame.slice("data: ".length))));
+      expect(stream.flatMap((event) => (event.type === "text" ? [event.delta] : [])).join("")).toBe("Still here.");
+      expect(stream.at(-1)).toEqual({ type: "done" });
+    } finally {
+      server.stop(true);
+    }
+  }, 15_000);
+});

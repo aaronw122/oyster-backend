@@ -23,6 +23,8 @@ export type AppDeps = {
   oauth?: OAuthDeps;
   /** Agent tool services; defaults to runtime/pearls/oauth/config above with the OpenRouter model. */
   agent?: AgentServices;
+  /** POST /messages keepalive comment interval; default 5s (tests shorten it). */
+  ssePingIntervalMs?: number;
 };
 export type AppEnv = { Variables: { userId: string } };
 

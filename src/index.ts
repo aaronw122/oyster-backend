@@ -29,5 +29,10 @@ const agent: AgentServices = {
 };
 if (!agent.model) console.warn("OPENROUTER_API_KEY is not set; POST /messages will report that the assistant is unavailable.");
 const app = createApp({ config, db, pearls, users: new UserStore(db), runtime, oauth, agent });
-const server = Bun.serve({ port: config.port, fetch: app.fetch });
+const server = Bun.serve({
+  port: config.port,
+  fetch: app.fetch,
+  // Agent turns can go quiet for a while (keepalive pings cover SSE); 255s is Bun's maximum.
+  idleTimeout: 255,
+});
 console.log(`oyster listening on ${server.url}`);

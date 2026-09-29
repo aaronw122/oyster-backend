@@ -43,10 +43,12 @@ export type TurnState = {
   ended: EndReason | null;
   /** Hashes of drafts the user has seen via preview_pearl (save requires one). */
   previewed: Set<string>;
+  /** Previews running in this step; a question asked alongside waits so the user sees the preview first. */
+  previewsInFlight: Set<Promise<unknown>>;
 };
 
 export function createTurnState(previewed: Iterable<string> = []): TurnState {
-  return { toolCalls: 0, fetchProbes: 0, exhausted: false, ended: null, previewed: new Set(previewed) };
+  return { toolCalls: 0, fetchProbes: 0, exhausted: false, ended: null, previewed: new Set(previewed), previewsInFlight: new Set() };
 }
 
 export type ToolContext = {
@@ -159,6 +161,19 @@ export function createTools(ctx: ToolContext): ToolSet {
     error: sensitive && failure.stage !== "fit" ? maskValues(failure.detail) : failure.detail,
     ...(failure.sizes ? { sizes: failure.sizes } : {}),
   });
+
+  /** Runs the draft and, on success, sends the real previews to the app (never to the model when sensitive). */
+  const showPreview = async (draft: DraftPearl) => {
+    const sensitive = draftSensitive(draft);
+    const run = await runDraft(userId, draft, runtime);
+    if (!run.ok) return failureResult(run.failure, sensitive || run.sensitive);
+    emit({ type: "preview", previews: run.previews });
+    state.previewed.add(draftHash(draft));
+    if (sensitive || run.sensitive) {
+      return { ok: true, shownToUser: true, sensitive: true, outputShape: summarizeJson(run.output, { redact: true }) };
+    }
+    return { ok: true, shownToUser: true, previews: run.previews };
+  };
 
   const signInStatus = (provider: string) => ({
     provider,
@@ -311,6 +326,7 @@ export function createTools(ctx: ToolContext): ToolSet {
       execute: guarded(null, async ({ question, options }: { question: string; options?: string[] }) => {
         const problem = plainTextProblem([question, ...(options ?? [])]);
         if (problem) return problem;
+        await Promise.allSettled(state.previewsInFlight);
         emit({ type: "question", id: randomUUID(), text: question, ...(options?.length ? { options } : {}) });
         state.ended = "ask_user";
         return { ok: true, shownToUser: true, note: "Wait for the user's answer." };
@@ -344,16 +360,10 @@ export function createTools(ctx: ToolContext): ToolSet {
       description:
         "Show the user a live preview of the draft at every widget size. Call after test_pearl passes and before save_pearl. Real values go only to the user (you see them only when the data isn't sensitive).",
       inputSchema: DraftSchema,
-      execute: guarded("Building a preview", async (draft: DraftPearl) => {
-        const sensitive = draftSensitive(draft);
-        const run = await runDraft(userId, draft, runtime);
-        if (!run.ok) return failureResult(run.failure, sensitive || run.sensitive);
-        emit({ type: "preview", previews: run.previews });
-        state.previewed.add(draftHash(draft));
-        if (sensitive || run.sensitive) {
-          return { ok: true, shownToUser: true, sensitive: true, outputShape: summarizeJson(run.output, { redact: true }) };
-        }
-        return { ok: true, shownToUser: true, previews: run.previews };
+      execute: guarded("Building a preview", (draft: DraftPearl) => {
+        const preview = showPreview(draft);
+        state.previewsInFlight.add(preview);
+        return preview.finally(() => state.previewsInFlight.delete(preview));
       }),
     }),
 

@@ -9,6 +9,8 @@ import type { AppDeps, AppEnv } from "../app.ts";
 import { apiError } from "../errors.ts";
 
 const MAX_MESSAGE_CHARS = 8_000;
+/** Keeps the connection alive while the model is silent (e.g. writing a long tool call). */
+export const DEFAULT_PING_INTERVAL_MS = 5_000;
 
 /**
  * `POST /messages` (§2c): one user message in, a `text/event-stream` of
@@ -47,6 +49,13 @@ export function messagesRoutes(deps: AppDeps): Hono<AppEnv> {
     if (history === null) return apiError(c, 404, "not_found", "No chat session with that id belongs to this account.");
     if (active.has(sessionId)) return apiError(c, 409, "session_busy", "This chat is still answering the previous message.");
     active.add(sessionId);
+    // Bun.serve's idle timeout is not reset by writes to a streaming response (Bun 1.2), so a
+    // long turn would be cut off mid-stream; disable it for this request. `c.env` is the Bun
+    // server when the app is served by Bun.serve (absent in in-process tests).
+    const server: unknown = c.env;
+    if (server && typeof server === "object" && "timeout" in server && typeof server.timeout === "function") {
+      server.timeout(c.req.raw, 0);
+    }
 
     return streamSSE(c, async (stream) => {
       const abort = new AbortController();
@@ -56,6 +65,10 @@ export function messagesRoutes(deps: AppDeps): Hono<AppEnv> {
       const emit = (event: ChatEvent) => {
         writes = writes.then(() => stream.writeSSE({ data: JSON.stringify(event) }));
       };
+      // SSE comment lines are ignored by clients but keep proxies (e.g. a tunnel) from idling out.
+      const ping = setInterval(() => {
+        writes = writes.then(() => stream.write(": ping\n\n")).then(() => undefined);
+      }, deps.ssePingIntervalMs ?? DEFAULT_PING_INTERVAL_MS);
       try {
         const turn = await runAgentTurn({
           userId,
@@ -72,6 +85,7 @@ export function messagesRoutes(deps: AppDeps): Hono<AppEnv> {
         console.error(`[POST /messages] session ${sessionId}`, error);
         emit({ type: "error", text: "Something went wrong on my side. Please try again." });
       } finally {
+        clearInterval(ping);
         active.delete(sessionId);
         emit({ type: "done" });
         await writes.catch(() => undefined);

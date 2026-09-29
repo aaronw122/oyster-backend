@@ -93,6 +93,18 @@ describe("preview and save", () => {
     expect(JSON.stringify(toolResultsSeen(model, "preview_pearl"))).toContain("72°");
   });
 
+  test("a question asked alongside a preview reaches the app after the preview", async () => {
+    await turn([
+      {
+        calls: [
+          { tool: "preview_pearl", input: weatherDraft },
+          { tool: "ask_user", input: { question: "Save this?", options: ["Save it", "Change something"] } },
+        ],
+      },
+    ]);
+    expect(env.events.filter((event) => event.type !== "status").map((event) => event.type)).toEqual(["preview", "question"]);
+  });
+
   test("sensitive data: the model sees only shapes while the app preview has real values", async () => {
     env.services.oauth?.tokens.save("alice", "bank", { accessToken: "tok-secret-123" });
     env.payload.current = { accounts: [{ name: "Everyday Checking", current: 4821.37 }] };

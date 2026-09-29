@@ -8,7 +8,14 @@ export const SIZES = ["inline", "rectangular", "small", "medium"] as const;
 export const SizeSchema = z.enum(SIZES);
 export type Size = z.infer<typeof SizeSchema>;
 
-const IsoDateTime = z.iso.datetime({ offset: true });
+// Whole-second UTC only, e.g. "2026-09-29T12:42:10Z". Produce with `isoNow`.
+const IsoDateTime = z.iso.datetime({ precision: 0 });
+
+/** Formats `date` as the contract timestamp: whole-second UTC with a `Z` suffix. */
+export function isoNow(date: Date = new Date()): string {
+  return date.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
 const Version = z.number().int().positive();
 
 // ── §2b Widget output ───────────────────────────────────────────────────────
@@ -73,7 +80,11 @@ export const PearlSchema = z.object({
   name: z.string(),
   userId: z.string(),
   inputs: z.record(z.string(), z.unknown()),
-  sources: z.array(PearlSourceSchema),
+  sources: z
+    .array(PearlSourceSchema)
+    .refine((sources) => new Set(sources.map((s) => s.id)).size === sources.length, {
+      message: "source ids must be unique",
+    }),
   transform: z.string(),
   version: Version,
   lastGood: z.partialRecord(SizeSchema, LastGoodSchema).optional(),
@@ -140,7 +151,7 @@ export const SavePearlRequestSchema = PearlSchema.omit({
   version: true,
   lastGood: true,
   status: true,
-});
+}).strict();
 export type SavePearlRequest = z.infer<typeof SavePearlRequestSchema>;
 
 /** `POST /pearls` / `PUT /pearls/:id` response */

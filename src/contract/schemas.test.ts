@@ -8,6 +8,7 @@ import {
   SavePearlRequestSchema,
   SizeSchema,
   WidgetOutputSchema,
+  isoNow,
 } from "./index.ts";
 
 const pearl = await Bun.file(new URL("../../fixtures/contract/pearl.citibike.json", import.meta.url)).json();
@@ -68,6 +69,38 @@ describe("Pearl", () => {
   test("rejects non-ISO lastGood timestamps", () => {
     const small = { ...pearl.lastGood.small, updatedAt: "Sep 29 2026 12:42" };
     expect(PearlSchema.safeParse({ ...pearl, lastGood: { small } }).success).toBe(false);
+  });
+
+  test("rejects duplicate source ids", () => {
+    const weather = { id: "citibike", url: "https://api.open-meteo.com/v1/forecast", method: "GET" };
+    expect(PearlSchema.safeParse({ ...pearl, sources: [gbfs, weather] }).success).toBe(false);
+    expect(PearlSchema.safeParse({ ...pearl, sources: [gbfs, { ...weather, id: "weather" }] }).success).toBe(
+      true,
+    );
+  });
+});
+
+describe("SavePearlRequest", () => {
+  test("rejects each server-owned field", () => {
+    const { id, userId, version, lastGood, status, ...save } = pearl;
+    expect(SavePearlRequestSchema.safeParse(save).success).toBe(true);
+    for (const [key, value] of Object.entries({ id, userId, version, lastGood, status })) {
+      expect(SavePearlRequestSchema.safeParse({ ...save, [key]: value }).success).toBe(false);
+    }
+  });
+});
+
+describe("timestamps", () => {
+  test("isoNow emits whole-second UTC that the contract accepts", () => {
+    const stamp = isoNow(new Date("2026-09-29T12:42:10.987Z"));
+    expect(stamp).toBe("2026-09-29T12:42:10Z");
+    expect(PearlDataSchema.safeParse({ ...pearlData, updatedAt: isoNow() }).success).toBe(true);
+  });
+
+  test("rejects fractional seconds and offsets", () => {
+    for (const updatedAt of ["2026-09-29T12:42:10.123Z", "2026-09-29T08:42:10-04:00"]) {
+      expect(PearlDataSchema.safeParse({ ...pearlData, updatedAt }).success).toBe(false);
+    }
   });
 });
 

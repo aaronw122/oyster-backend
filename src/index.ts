@@ -2,6 +2,7 @@ import { type AgentServices, createAgentModel, createWebSearch } from "./agent/i
 import { loadConfig } from "./config.ts";
 import { openDb } from "./db/index.ts";
 import { loadProviders, OAuthTokenStore } from "./oauth/index.ts";
+import { createRepairer, RepairQueue } from "./repair/index.ts";
 import type { RuntimeDeps } from "./runtime/index.ts";
 import { createApp } from "./server/app.ts";
 import { createMemorySourceCache } from "./sources/index.ts";
@@ -27,7 +28,13 @@ const agent: AgentServices = {
   search: createWebSearch({ braveApiKey: config.braveApiKey }),
   model: createAgentModel(config) ?? undefined,
 };
-if (!agent.model) console.warn("OPENROUTER_API_KEY is not set; POST /messages will report that the assistant is unavailable.");
+if (agent.model) {
+  const repairs = new RepairQueue({ pearls, repair: createRepairer(agent) });
+  runtime.onRefreshFailure = (pearl, failure, ctx) => repairs.enqueue(pearl, failure, ctx);
+} else {
+  console.warn("OPENROUTER_API_KEY is not set; POST /messages will report that the assistant is unavailable and broken Pearls won't be repaired.");
+  runtime.onRefreshFailure = (pearl) => pearls.setStatus(pearl.id, "broken");
+}
 const app = createApp({ config, db, pearls, users: new UserStore(db), runtime, oauth, agent });
 const server = Bun.serve({
   port: config.port,

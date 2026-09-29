@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { type LanguageModel, type ModelMessage, type ToolSet, tool } from "ai";
 import { z } from "zod";
 import type { Config } from "../config.ts";
-import { type ChatEvent, PearlSourceSchema, SIZES } from "../contract/index.ts";
+import { type ChatEvent, PearlSourceSchema, SIZES, type Size, type WidgetOutput } from "../contract/index.ts";
 import { createOAuthStartUrl, type OAuthDeps } from "../oauth/index.ts";
 import { type DraftPearl, execute, isSensitive, type RunFailure, runDraft, type RuntimeDeps, savePearl } from "../runtime/index.ts";
 import { type Builtin, listBuiltins } from "../sources/builtins.ts";
@@ -31,7 +31,13 @@ export type AgentServices = {
 export type AgentLimits = { maxSteps: number; maxToolCalls: number; maxFetchProbes: number };
 export const DEFAULT_LIMITS: AgentLimits = { maxSteps: 12, maxToolCalls: 24, maxFetchProbes: 4 };
 
-export type EndReason = "ask_user" | "oauth" | "saved" | "unavailable";
+export type EndReason = "ask_user" | "oauth" | "saved" | "unavailable" | "repaired";
+
+/** A transform that passed a live run with the Pearl's own sources and inputs, all four sizes fitting. */
+export type RepairFix = { transform: string; reason: string; previews: Record<Size, WidgetOutput> };
+
+/** The saved Pearl a repair turn works on; `submit` receives the first fix that passes. */
+export type RepairTarget = { draft: DraftPearl; sensitive: boolean; submit: (fix: RepairFix) => void };
 
 /** Mutable per-turn bookkeeping shared by the tools and the loop. */
 export type TurnState = {
@@ -57,6 +63,8 @@ export type ToolContext = {
   emit: (e: ChatEvent) => void;
   limits: AgentLimits;
   mode: "create" | "repair";
+  /** Required in repair mode: the Pearl being repaired (its sources and inputs are fixed). */
+  repair?: RepairTarget;
   /** Shared with `runAgentTurn`; a fresh one is created when omitted. */
   state?: TurnState;
 };
@@ -67,6 +75,7 @@ const LIMIT_REACHED = {
   ok: false,
   error: "Budget for this turn is used up. Call report_unavailable now with a short, plain explanation.",
 } as const;
+const REPAIR_LIMIT_REACHED = { ok: false, error: "The repair budget is used up. Stop now." } as const;
 
 const DraftSchema = z.object({
   sources: z.array(PearlSourceSchema).min(1).describe("Data sources; each sets exactly one of `builtin` or `url`."),
@@ -113,7 +122,9 @@ export function previewedDrafts(history: readonly ModelMessage[]): string[] {
  * The §3 tool set. Every tool result is what the model sees; values from
  * sensitive sources never appear in it (only shapes, types, and errors). Real
  * preview values reach the app only through the `preview` event.
- * `repair` mode omits the user-facing tools (questions, sign-in, preview, save).
+ * `repair` mode is a different, narrower set: find_builtin, a transform-only
+ * test_pearl, and submit_repair — nothing that talks to the user, signs in,
+ * saves, searches the web, or probes other URLs.
  */
 export function createTools(ctx: ToolContext): ToolSet {
   const { userId, services, emit, limits } = ctx;
@@ -126,18 +137,23 @@ export function createTools(ctx: ToolContext): ToolSet {
   /** True for providers whose data is sensitive: any builtin using that provider is marked sensitive. */
   const providerSensitive = (provider: string | undefined) =>
     provider !== undefined && builtins().some((builtin) => builtin.auth?.provider === provider && builtin.sensitive === true);
+  const repair = ctx.repair;
+  if (ctx.mode === "repair" && !repair) throw new Error("createTools: repair mode needs the Pearl being repaired");
   const draftSensitive = (draft: DraftPearl) =>
-    isSensitive(draft, runtime) || draft.sources.some((source) => providerSensitive(source.auth?.provider));
+    repair?.sensitive === true ||
+    isSensitive(draft, runtime) ||
+    draft.sources.some((source) => providerSensitive(source.auth?.provider));
+  const limitReached = ctx.mode === "repair" ? REPAIR_LIMIT_REACHED : LIMIT_REACHED;
 
   /** Counts the call against the tool budget, emits its status, and turns thrown errors into results. */
   const guarded =
     <I, O>(status: string | null, run: (input: I) => Promise<O>) =>
-    async (input: I): Promise<O | typeof LIMIT_REACHED | { ok: false; error: string }> => {
-      if (state.exhausted) return LIMIT_REACHED;
+    async (input: I): Promise<O | typeof limitReached | { ok: false; error: string }> => {
+      if (state.exhausted) return limitReached;
       state.toolCalls += 1;
       if (state.toolCalls > limits.maxToolCalls) {
         state.exhausted = true;
-        return LIMIT_REACHED;
+        return limitReached;
       }
       if (status) emit({ type: "status", text: status });
       try {
@@ -162,6 +178,23 @@ export function createTools(ctx: ToolContext): ToolSet {
     ...(failure.sizes ? { sizes: failure.sizes } : {}),
   });
 
+  /** Live run of a draft; the model sees raw output (shape only when sensitive) and every size problem. */
+  const testDraft = async (draft: DraftPearl) => {
+    const sensitive = draftSensitive(draft);
+    const run = await execute(userId, draft, runtime);
+    if (!run.ok) return failureResult(run.failure, sensitive);
+    const sizeProblems = SIZES.flatMap((size) => {
+      const fit = run.fits[size];
+      return fit.ok ? [] : fit.errors;
+    });
+    return {
+      ok: true,
+      fitsAllSizes: sizeProblems.length === 0,
+      sizeProblems,
+      ...(sensitive ? { sensitive: true, outputShape: summarizeJson(run.output, { redact: true }) } : { output: run.output }),
+    };
+  };
+
   /** Runs the draft and, on success, sends the real previews to the app (never to the model when sensitive). */
   const showPreview = async (draft: DraftPearl) => {
     const sensitive = draftSensitive(draft);
@@ -181,7 +214,7 @@ export function createTools(ctx: ToolContext): ToolSet {
     connected: services.oauth?.tokens.has(userId, provider) ?? false,
   });
 
-  const discovery: ToolSet = {
+  const discovery = {
     find_builtin: tool({
       description:
         "List Oyster's built-in integrations (purpose, params, output shape, sign-in needs) and the pre-registered sign-in providers. With `builtin` + `query`, search that builtin's catalog (e.g. a station name → stop ids) when it supports lookup.",
@@ -279,23 +312,7 @@ export function createTools(ctx: ToolContext): ToolSet {
       description:
         "Run a draft Pearl against live data: fetch sources, run the transform, and check every widget size. Returns the raw output (shape and types only for sensitive data) and any size problems. Nothing is shown to the user.",
       inputSchema: DraftSchema,
-      execute: guarded("Testing with live data", async (draft: DraftPearl) => {
-        const sensitive = draftSensitive(draft);
-        const run = await execute(userId, draft, runtime);
-        if (!run.ok) return failureResult(run.failure, sensitive);
-        const sizeProblems = SIZES.flatMap((size) => {
-          const fit = run.fits[size];
-          return fit.ok ? [] : fit.errors;
-        });
-        return {
-          ok: true,
-          fitsAllSizes: sizeProblems.length === 0,
-          sizeProblems,
-          ...(sensitive
-            ? { sensitive: true, outputShape: summarizeJson(run.output, { redact: true }) }
-            : { output: run.output }),
-        };
-      }),
+      execute: guarded("Testing with live data", testDraft),
     }),
 
     report_unavailable: tool({
@@ -311,9 +328,40 @@ export function createTools(ctx: ToolContext): ToolSet {
         return { ok: true, shownToUser: true };
       },
     }),
-  };
+  } satisfies ToolSet;
 
-  if (ctx.mode === "repair") return discovery;
+  if (ctx.mode === "repair" && repair) {
+    const TransformSchema = z
+      .string()
+      .min(1)
+      .describe("JS function expression `(sources, inputs, std) => ({ value, subtitle?, items? })`.");
+    const { sources, inputs } = repair.draft;
+    return {
+      find_builtin: discovery.find_builtin,
+      test_pearl: tool({
+        description:
+          "Run a transform against the Pearl's own sources and inputs with live data and check every widget size. Returns the raw output (shape and types only for sensitive data) and any size problems. Use it freely as a scratchpad to inspect the data.",
+        inputSchema: z.object({ transform: TransformSchema }),
+        execute: guarded(null, ({ transform }: { transform: string }) => testDraft({ sources, inputs, transform })),
+      }),
+      submit_repair: tool({
+        description:
+          "Submit the fixed transform. The server runs it live with the Pearl's own sources and inputs; it is accepted only if it succeeds and fits every widget size, which ends the repair. Otherwise you get the problem back.",
+        inputSchema: z.object({
+          transform: TransformSchema,
+          reason: z.string().min(1).max(160).describe("One short line for the audit log: what changed in the data and how the fix handles it."),
+        }),
+        execute: guarded(null, async ({ transform, reason }: { transform: string; reason: string }) => {
+          const draft = { sources, inputs, transform };
+          const run = await runDraft(userId, draft, runtime);
+          if (!run.ok) return failureResult(run.failure, draftSensitive(draft) || run.sensitive);
+          repair.submit({ transform, reason, previews: run.previews });
+          state.ended = "repaired";
+          return { ok: true, accepted: true };
+        }),
+      }),
+    };
+  }
 
   return {
     ask_user: tool({
@@ -402,7 +450,7 @@ export function createTools(ctx: ToolContext): ToolSet {
 const FALLBACK_UNAVAILABLE = "Sorry — I couldn't find a way to get that data right now.";
 
 /** Masks quoted strings and numbers so an error from a sensitive run can't carry values. */
-function maskValues(text: string): string {
+export function maskValues(text: string): string {
   return text.replace(/"[^"]*"|'[^']*'|`[^`]*`/g, '"…"').replace(/\d+(?:[.,]\d+)*/g, "#");
 }
 

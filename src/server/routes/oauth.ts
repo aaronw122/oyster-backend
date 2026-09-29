@@ -56,7 +56,21 @@ export function oauthRoutes({ config, db, oauth }: AppDeps & { oauth: OAuthDeps 
         maxAge: STATE_TTL_MS / 1000,
       });
       const redirectUri = oauthRedirectUri(config, provider);
-      return c.redirect(await adapter.authorizeUrl({ state: payload.nonce, redirectUri, codeVerifier }), 302);
+      try {
+        const authorizeUrl = await adapter.authorizeUrl({
+          state: payload.nonce,
+          redirectUri,
+          codeVerifier,
+          userId: payload.userId,
+          saveFlowData: (data) => nonces.saveFlowData(payload.nonce, data),
+        });
+        return c.redirect(authorizeUrl, 302);
+      } catch (err) {
+        // Providers that call an API to start (Plaid) can fail here; still return to the app.
+        const code: OAuthErrorCode = err instanceof OAuthError ? err.code : "provider_error";
+        console.error(`[oauth ${provider}] start failed: ${code}`);
+        return c.redirect(complete(provider, { ok: false, code }), 302);
+      }
     })
     .get("/:provider/callback", async (c) => {
       const provider = c.req.param("provider");
@@ -76,6 +90,7 @@ export function oauthRoutes({ config, db, oauth }: AppDeps & { oauth: OAuthDeps 
           query: new URL(c.req.url).searchParams,
           redirectUri: oauthRedirectUri(config, provider),
           codeVerifier: consumed.codeVerifier,
+          flowData: consumed.flowData,
         });
         oauth.tokens.save(consumed.userId, provider, token);
       } catch (err) {

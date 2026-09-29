@@ -1,4 +1,5 @@
 import { oauth2Adapter } from "../oauth2.ts";
+import { plaidAdapter, plaidConfigFromEnv } from "./plaid.ts";
 import type { OAuthProviderAdapter } from "../types.ts";
 
 export type OAuthEnv = Record<string, string | undefined>;
@@ -87,6 +88,11 @@ export const PROVIDER_FACTORIES: ProviderFactory[] = [
         extraAuthorizeParams: { approval_prompt: "auto" },
       })
     );
+  },
+  // Plaid Hosted Link (bank balances): PLAID_CLIENT_ID / PLAID_SECRET / PLAID_ENV.
+  (env) => {
+    const config = plaidConfigFromEnv(env);
+    return config && plaidAdapter(config);
   },
 ];
 

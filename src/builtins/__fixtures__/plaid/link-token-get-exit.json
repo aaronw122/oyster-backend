@@ -1,0 +1,35 @@
+{
+  "created_at": "2026-09-29T12:00:00Z",
+  "expiration": "2026-09-29T12:30:00Z",
+  "link_sessions": [
+    {
+      "events": [],
+      "finished_at": "2026-09-29T12:03:03.326860787Z",
+      "link_session_id": "f3c3b8fe-16c6-4670-8f2b-e8d797aa6e9f",
+      "started_at": "2026-09-29T12:01:17.0951134Z",
+      "on_exit": {
+        "error": null,
+        "metadata": {
+          "institution": null,
+          "link_session_id": "f3c3b8fe-16c6-4670-8f2b-e8d797aa6e9f",
+          "request_id": "Z9MB4fuMB2TJqgL",
+          "status": null
+        }
+      }
+    }
+  ],
+  "link_token": "link-sandbox-af1a0311-da53-4636-b754-dd15cc058176",
+  "metadata": {
+    "client_name": "Oyster",
+    "country_codes": [
+      "US"
+    ],
+    "initial_products": [
+      "transactions"
+    ],
+    "language": "en",
+    "redirect_uri": null,
+    "webhook": null
+  },
+  "request_id": "jBBxxNC842EJNqW"
+}

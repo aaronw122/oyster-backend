@@ -61,7 +61,7 @@ export function oauthRedirectUri(config: Config, provider: string): string {
   return `${config.publicBaseUrl}/oauth/${encodeURIComponent(provider)}/callback`;
 }
 
-export type ConsumedNonce = { ok: true; userId: string; codeVerifier: string };
+export type ConsumedNonce = { ok: true; userId: string; codeVerifier: string; flowData?: string };
 export type NonceFailure = {
   ok: false;
   code: Extract<OAuthErrorCode, "invalid_state" | "state_expired" | "state_reused" | "provider_mismatch">;
@@ -104,8 +104,13 @@ export class OAuthNonceStore {
     return result.changes === 1 ? browserSecret : null;
   }
 
+  /** Attaches the adapter's opaque flow data to an unused nonce (see `OAuthProviderAdapter.saveFlowData`). */
+  saveFlowData(nonce: string, data: string): void {
+    this.#db.query("UPDATE oauth_state_nonces SET flow_data = $data WHERE nonce = $nonce AND used = 0").run({ nonce, data });
+  }
+
   /**
-   * Marks `nonce` used and returns its user and PKCE verifier. Requires the
+   * Marks `nonce` used and returns its user, PKCE verifier and flow data. Requires the
    * browser-binding secret from /start (constant-time compared) and a matching provider.
    */
   consume(
@@ -117,10 +122,18 @@ export class OAuthNonceStore {
     return this.#db.transaction((): ConsumedNonce | NonceFailure => {
       const row = this.#db
         .query<
-          { user_id: string; provider: string; code_verifier: string | null; browser_binding_hash: string; expires_at: string; used: number },
+          {
+            user_id: string;
+            provider: string;
+            code_verifier: string | null;
+            flow_data: string | null;
+            browser_binding_hash: string;
+            expires_at: string;
+            used: number;
+          },
           { nonce: string }
         >(
-          "SELECT user_id, provider, code_verifier, browser_binding_hash, expires_at, used FROM oauth_state_nonces WHERE nonce = $nonce",
+          "SELECT user_id, provider, code_verifier, flow_data, browser_binding_hash, expires_at, used FROM oauth_state_nonces WHERE nonce = $nonce",
         )
         .get({ nonce });
       // No row: /start never ran for this state (or it expired and was pruned).
@@ -130,8 +143,12 @@ export class OAuthNonceStore {
       if (row.provider !== provider) return { ok: false, code: "provider_mismatch" };
       if (row.used || !row.code_verifier) return { ok: false, code: "state_reused" };
       if (row.expires_at <= isoNow(new Date(now))) return { ok: false, code: "state_expired" };
-      this.#db.query("UPDATE oauth_state_nonces SET used = 1, code_verifier = NULL WHERE nonce = $nonce").run({ nonce });
-      return { ok: true, userId: row.user_id, codeVerifier: row.code_verifier };
+      this.#db
+        .query("UPDATE oauth_state_nonces SET used = 1, code_verifier = NULL, flow_data = NULL WHERE nonce = $nonce")
+        .run({ nonce });
+      const consumed: ConsumedNonce = { ok: true, userId: row.user_id, codeVerifier: row.code_verifier };
+      if (row.flow_data !== null) consumed.flowData = row.flow_data;
+      return consumed;
     })();
   }
 }

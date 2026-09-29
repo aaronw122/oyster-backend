@@ -1,0 +1,70 @@
+{
+  "created_at": "2026-09-29T12:00:00Z",
+  "expiration": "2026-09-29T12:30:00Z",
+  "link_sessions": [
+    {
+      "events": [],
+      "finished_at": "2026-09-29T12:03:03.326860787Z",
+      "link_session_id": "f3c3b8fe-16c6-4670-8f2b-e8d797aa6e9f",
+      "started_at": "2026-09-29T12:01:17.0951134Z",
+      "on_success": {
+        "metadata": {
+          "accounts": [
+            {
+              "class_type": null,
+              "id": "BxBXxLj1m4HMXBm9WZZmCWVbPjX16EHwv99vp",
+              "mask": "1234",
+              "name": "Plaid Checking",
+              "subtype": "checking",
+              "type": "depository",
+              "verification_status": null
+            }
+          ],
+          "institution": {
+            "institution_id": "ins_109508",
+            "name": "First Platypus Bank"
+          },
+          "link_session_id": "f3c3b8fe-16c6-4670-8f2b-e8d797aa6e9f",
+          "transfer_status": null
+        },
+        "public_token": "public-sandbox-d1e64436-f033-4302-a469-b90656edf8c7"
+      },
+      "results": {
+        "item_add_results": [
+          {
+            "accounts": [
+              {
+                "class_type": null,
+                "id": "BxBXxLj1m4HMXBm9WZZmCWVbPjX16EHwv99vp",
+                "mask": "1234",
+                "name": "Plaid Checking",
+                "subtype": "checking",
+                "type": "depository",
+                "verification_status": null
+              }
+            ],
+            "institution": {
+              "institution_id": "ins_109508",
+              "name": "First Platypus Bank"
+            },
+            "public_token": "public-sandbox-d1e64436-f033-4302-a469-b90656edf8c7"
+          }
+        ]
+      }
+    }
+  ],
+  "link_token": "link-sandbox-af1a0311-da53-4636-b754-dd15cc058176",
+  "metadata": {
+    "client_name": "Oyster",
+    "country_codes": [
+      "US"
+    ],
+    "initial_products": [
+      "transactions"
+    ],
+    "language": "en",
+    "redirect_uri": null,
+    "webhook": null
+  },
+  "request_id": "jBBxxNC842EJNqW"
+}

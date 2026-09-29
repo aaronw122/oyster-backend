@@ -4,13 +4,22 @@ export type StoredToken = { accessToken: string; refreshToken?: string; expiresA
 /**
  * One pre-registered OAuth provider. `codeVerifier` is the PKCE verifier the routes
  * generate and keep server-side (bound to the state nonce); adapters that don't use
- * PKCE ignore it.
+ * PKCE ignore it. `userId` is the Oyster user starting the flow (for adapters that
+ * must derive an opaque per-user id; never sent to a provider as-is).
+ * `saveFlowData` stores one opaque string server-side on the state nonce (e.g.
+ * Plaid's link token); /callback hands it back as `flowData`, once.
  */
 export interface OAuthProviderAdapter {
   id: string;
   displayName: string;
-  authorizeUrl(ctx: { state: string; redirectUri: string; codeVerifier?: string }): Promise<string>;
-  exchange(ctx: { query: URLSearchParams; redirectUri: string; codeVerifier?: string }): Promise<StoredToken>;
+  authorizeUrl(ctx: {
+    state: string;
+    redirectUri: string;
+    codeVerifier?: string;
+    userId?: string;
+    saveFlowData?: (data: string) => void;
+  }): Promise<string>;
+  exchange(ctx: { query: URLSearchParams; redirectUri: string; codeVerifier?: string; flowData?: string }): Promise<StoredToken>;
   refresh?(token: StoredToken): Promise<StoredToken>;
 }
 

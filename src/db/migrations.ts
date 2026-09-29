@@ -89,4 +89,9 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX oauth_state_nonces_expires_at ON oauth_state_nonces(expires_at);
     `,
   },
+  {
+    // Adapter-owned opaque value bound to one OAuth state nonce (e.g. Plaid's link token).
+    name: "oauth_flow_data",
+    sql: `ALTER TABLE oauth_state_nonces ADD COLUMN flow_data TEXT;`,
+  },
 ];

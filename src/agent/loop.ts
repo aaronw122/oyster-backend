@@ -10,6 +10,7 @@ import {
   DEFAULT_LIMITS,
   type EndReason,
   previewedDrafts,
+  type RepairTarget,
 } from "./tools.ts";
 
 export type TurnEnd = EndReason | "text" | "limit" | "error";
@@ -29,6 +30,8 @@ const MAX_SESSION_ID = 256;
  * conversation to persist (history + this message + completed steps) and why the
  * turn ended. Never throws: model/transport failures emit an `error` event.
  * Budgets (steps, tool calls, fetch probes) that run out force report_unavailable.
+ * In `repair` mode (with `repair` set) there is no user: the turn just stops when
+ * a budget runs out ("limit") and ends "repaired" once submit_repair accepts a fix.
  */
 export async function runAgentTurn(opts: {
   userId: string;
@@ -41,6 +44,8 @@ export async function runAgentTurn(opts: {
   limits?: Partial<AgentLimits>;
   model?: LanguageModel;
   mode?: "create" | "repair";
+  /** The Pearl being repaired; required in repair mode. */
+  repair?: RepairTarget;
   abortSignal?: AbortSignal;
 }): Promise<{ messages: ModelMessage[]; endedBy: TurnEnd }> {
   const { emit } = opts;
@@ -55,8 +60,9 @@ export async function runAgentTurn(opts: {
     return { messages: input, endedBy: "error" };
   }
 
+  const mode = opts.mode ?? "create";
   const state = createTurnState(previewedDrafts(opts.history));
-  const tools = createTools({ userId: opts.userId, services: opts.services, emit, limits, mode: opts.mode ?? "create", state });
+  const tools = createTools({ userId: opts.userId, services: opts.services, emit, limits, mode, repair: opts.repair, state });
   let forced = false;
   const prose = createProseFilter(
     (text) => emit({ type: "text", delta: text }),
@@ -77,9 +83,9 @@ export async function runAgentTurn(opts: {
       maxOutputTokens: MAX_OUTPUT_TOKENS,
       // Sticky provider routing for this chat, so its prompt cache stays warm.
       providerOptions: { openrouter: { session_id: opts.sessionId.slice(0, MAX_SESSION_ID) } },
-      stopWhen: [isStepCount(limits.maxSteps), () => state.ended !== null],
+      stopWhen: [isStepCount(limits.maxSteps), () => state.ended !== null, () => mode === "repair" && state.exhausted],
       prepareStep: ({ stepNumber }) => {
-        if (!state.exhausted && stepNumber < limits.maxSteps - 1) return {};
+        if (mode === "repair" || (!state.exhausted && stepNumber < limits.maxSteps - 1)) return {};
         forced = true;
         return { activeTools: ["report_unavailable"], toolChoice: { type: "tool", toolName: "report_unavailable" } };
       },
@@ -110,6 +116,7 @@ export async function runAgentTurn(opts: {
     return { messages: messages(), endedBy: "error" };
   }
 
+  if (mode === "repair") return { messages: messages(), endedBy: state.ended ?? (state.exhausted ? "limit" : "text") };
   // A budget ran out and the turn didn't otherwise end (question, sign-in, save).
   if ((forced || state.exhausted) && (state.ended === null || state.ended === "unavailable")) {
     if (state.ended === null) emit({ type: "unavailable", text: LIMIT_TEXT });

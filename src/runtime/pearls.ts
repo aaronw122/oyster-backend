@@ -47,7 +47,9 @@ export async function savePearl(
  * `size`. Success persists `lastGood[size]`; failure (including this size not
  * fitting) returns `lastGood[size]` as stale, or 503 when there is none.
  * A run that finishes after the Pearl moved to a newer version (save/repair
- * raced it) neither overwrites last-good nor triggers repair.
+ * raced it) neither overwrites last-good nor triggers repair. A "broken" or
+ * "repairing" Pearl whose current version runs cleanly at every size (the fault
+ * was transient, or a restart dropped the repair in flight) is marked "ok" again.
  */
 export async function getPearlData(
   userId: string,
@@ -64,7 +66,10 @@ export async function getPearlData(
   const fit = run.ok ? run.fits[size] : null;
   if (fit?.ok) {
     const updatedAt = isoNow();
-    if (!superseded) deps.pearls.setLastGood(pearl.id, size, { output: fit.output, version: pearl.version, updatedAt });
+    if (!superseded) {
+      deps.pearls.setLastGood(pearl.id, size, { output: fit.output, version: pearl.version, updatedAt });
+      if (current.status !== "ok" && run.ok && !fitFailure(run.fits, SIZES)) deps.pearls.setStatus(pearl.id, "ok");
+    }
     deps.pearls.recordRun(pearl.id, { size, ok: true, kind: "refresh" });
     return { status: 200, body: { pearlId: pearl.id, version: pearl.version, size, output: fit.output, updatedAt, stale: false } };
   }

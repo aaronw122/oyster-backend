@@ -1,0 +1,189 @@
+{
+  "latitude": 40.736412,
+  "longitude": -73.9841,
+  "generationtime_ms": 0.7061958312988281,
+  "utc_offset_seconds": -14400,
+  "timezone": "America/New_York",
+  "timezone_abbreviation": "GMT-4",
+  "elevation": 32.0,
+  "current_units": {
+    "time": "iso8601",
+    "interval": "seconds",
+    "temperature_2m": "°F",
+    "apparent_temperature": "°F",
+    "relative_humidity_2m": "%",
+    "precipitation": "inch",
+    "weather_code": "wmo code",
+    "wind_speed_10m": "mp/h",
+    "is_day": ""
+  },
+  "current": {
+    "time": "2026-09-29T15:30",
+    "interval": 900,
+    "temperature_2m": 68.0,
+    "apparent_temperature": 69.5,
+    "relative_humidity_2m": 81,
+    "precipitation": 0.000,
+    "weather_code": 3,
+    "wind_speed_10m": 6.5,
+    "is_day": 1
+  },
+  "hourly_units": {
+    "time": "iso8601",
+    "temperature_2m": "°F",
+    "precipitation_probability": "%",
+    "weather_code": "wmo code",
+    "is_day": ""
+  },
+  "hourly": {
+    "time": [
+      "2026-09-29T15:00",
+      "2026-09-29T16:00",
+      "2026-09-29T17:00",
+      "2026-09-29T18:00",
+      "2026-09-29T19:00",
+      "2026-09-29T20:00",
+      "2026-09-29T21:00",
+      "2026-09-29T22:00",
+      "2026-09-29T23:00",
+      "2026-09-30T00:00",
+      "2026-09-30T01:00",
+      "2026-09-30T02:00",
+      "2026-09-30T03:00"
+    ],
+    "temperature_2m": [
+      67.5,
+      68.9,
+      66.9,
+      66.7,
+      65.3,
+      64.6,
+      63.5,
+      62.3,
+      61.3,
+      60.7,
+      60.0,
+      59.5,
+      59.5
+    ],
+    "precipitation_probability": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "weather_code": [
+      3,
+      2,
+      3,
+      2,
+      3,
+      3,
+      2,
+      0,
+      0,
+      1,
+      3,
+      2,
+      3
+    ],
+    "is_day": [
+      1,
+      1,
+      1,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "daily_units": {
+    "time": "iso8601",
+    "weather_code": "wmo code",
+    "temperature_2m_max": "°F",
+    "temperature_2m_min": "°F",
+    "precipitation_probability_max": "%",
+    "sunrise": "iso8601",
+    "sunset": "iso8601"
+  },
+  "daily": {
+    "time": [
+      "2026-09-29",
+      "2026-09-30",
+      "2026-10-01",
+      "2026-10-02",
+      "2026-10-03",
+      "2026-10-04",
+      "2026-10-05"
+    ],
+    "weather_code": [
+      3,
+      3,
+      3,
+      63,
+      3,
+      63,
+      3
+    ],
+    "temperature_2m_max": [
+      69.8,
+      70.3,
+      78.5,
+      87.3,
+      71.6,
+      63.4,
+      66.8
+    ],
+    "temperature_2m_min": [
+      58.1,
+      56.9,
+      60.5,
+      67.3,
+      61.6,
+      57.4,
+      51.1
+    ],
+    "precipitation_probability_max": [
+      1,
+      0,
+      1,
+      26,
+      26,
+      38,
+      35
+    ],
+    "sunrise": [
+      "2026-09-29T06:50",
+      "2026-09-30T06:51",
+      "2026-10-01T06:52",
+      "2026-10-02T06:53",
+      "2026-10-03T06:54",
+      "2026-10-04T06:55",
+      "2026-10-05T06:56"
+    ],
+    "sunset": [
+      "2026-09-29T18:41",
+      "2026-09-30T18:39",
+      "2026-10-01T18:37",
+      "2026-10-02T18:36",
+      "2026-10-03T18:34",
+      "2026-10-04T18:32",
+      "2026-10-05T18:31"
+    ]
+  }
+}

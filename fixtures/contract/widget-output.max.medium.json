@@ -1,0 +1,26 @@
+{
+  "value": "W 21 St & 6 Ave · 5🚲",
+  "subtitle": "5 docks free · 0.2 mi · as of 8:42 AM 🚲✓",
+  "items": [
+    {
+      "label": "W 22 St & 8 Ave · Café",
+      "value": "12 docks 🚲"
+    },
+    {
+      "label": "9 Ave & W 18 St — Café",
+      "value": "3 docks 🚲✓"
+    },
+    {
+      "label": "Broadway & E 14 St · 🚲",
+      "value": "0 docks ⚠️"
+    },
+    {
+      "label": "Pier 62 · Hudson River",
+      "value": "9 docks ·✓"
+    },
+    {
+      "label": "Cooper Sq & Astor Pl ✓",
+      "value": "4 docks ≈🚲"
+    }
+  ]
+}

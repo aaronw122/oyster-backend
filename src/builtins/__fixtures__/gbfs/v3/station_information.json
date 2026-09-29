@@ -1,0 +1,189 @@
+{
+  "last_updated": "2026-09-29T19:39:42Z",
+  "ttl": 60,
+  "version": "3.0",
+  "data": {
+    "stations": [
+      {
+        "station_id": "66dc2995-0aca-11e7-82f6-3863bb44ef7c",
+        "name": [
+          {
+            "text": "W 25 St & 6 Ave",
+            "language": "en"
+          }
+        ],
+        "short_name": [
+          {
+            "text": "6215.04",
+            "language": "en"
+          }
+        ],
+        "lat": 40.74395411,
+        "lon": -73.99144871,
+        "capacity": 51
+      },
+      {
+        "station_id": "66dc120f-0aca-11e7-82f6-3863bb44ef7c",
+        "name": [
+          {
+            "text": "W 21 St & 6 Ave",
+            "language": "en"
+          }
+        ],
+        "short_name": [
+          {
+            "text": "6140.05",
+            "language": "en"
+          }
+        ],
+        "lat": 40.74173969,
+        "lon": -73.99415556,
+        "capacity": 74
+      },
+      {
+        "station_id": "5f7ac86c-1a98-4603-8749-4bb83ac84acd",
+        "name": [
+          {
+            "text": "Broadway & E 21 St",
+            "language": "en"
+          }
+        ],
+        "short_name": [
+          {
+            "text": "6098.10",
+            "language": "en"
+          }
+        ],
+        "lat": 40.739888408589955,
+        "lon": -73.98958593606949,
+        "capacity": 54
+      },
+      {
+        "station_id": "66db33fc-0aca-11e7-82f6-3863bb44ef7c",
+        "name": [
+          {
+            "text": "W 18 St & 6 Ave",
+            "language": "en"
+          }
+        ],
+        "short_name": [
+          {
+            "text": "6064.08",
+            "language": "en"
+          }
+        ],
+        "lat": 40.73971301,
+        "lon": -73.99456405,
+        "capacity": 69
+      },
+      {
+        "station_id": "daefc84c-1b16-4220-8e1f-10ea4866fdc7",
+        "name": [
+          {
+            "text": "Broadway & W 25 St",
+            "language": "en"
+          }
+        ],
+        "short_name": [
+          {
+            "text": "6173.08",
+            "language": "en"
+          }
+        ],
+        "lat": 40.74286877312112,
+        "lon": -73.98918628692627,
+        "capacity": 109
+      },
+      {
+        "station_id": "66dc1c5c-0aca-11e7-82f6-3863bb44ef7c",
+        "name": [
+          {
+            "text": "W 24 St & 7 Ave",
+            "language": "en"
+          }
+        ],
+        "short_name": [
+          {
+            "text": "6257.03",
+            "language": "en"
+          }
+        ],
+        "lat": 40.74487634,
+        "lon": -73.99529885,
+        "capacity": 79
+      },
+      {
+        "station_id": "66db95e5-0aca-11e7-82f6-3863bb44ef7c",
+        "name": [
+          {
+            "text": "W 20 St & 7 Ave",
+            "language": "en"
+          }
+        ],
+        "short_name": [
+          {
+            "text": "6182.02",
+            "language": "en"
+          }
+        ],
+        "lat": 40.74238787,
+        "lon": -73.99726235,
+        "capacity": 44
+      },
+      {
+        "station_id": "1794096976946852066",
+        "name": [
+          {
+            "text": "W 27 St & 6 Ave",
+            "language": "en"
+          }
+        ],
+        "short_name": [
+          {
+            "text": "6215.07",
+            "language": "en"
+          }
+        ],
+        "lat": 40.74526,
+        "lon": -73.99062,
+        "capacity": 66
+      },
+      {
+        "station_id": "2e74ea1d-02a0-47bf-9665-dce2d65de8d7",
+        "name": [
+          {
+            "text": "W 17 St & 7 Ave",
+            "language": "en"
+          }
+        ],
+        "short_name": [
+          {
+            "text": "6107.08",
+            "language": "en"
+          }
+        ],
+        "lat": 40.740564236339516,
+        "lon": -73.99852573871613,
+        "capacity": 47
+      },
+      {
+        "station_id": "3d340fc5-8c86-4d5e-974d-ae28958e61e8",
+        "name": [
+          {
+            "text": "W 20 St & 5 Ave",
+            "language": "en"
+          }
+        ],
+        "short_name": [
+          {
+            "text": "6098.02",
+            "language": "en"
+          }
+        ],
+        "lat": 40.73972989238724,
+        "lon": -73.99103969335556,
+        "capacity": 57
+      }
+    ]
+  }
+}

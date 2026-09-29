@@ -5,6 +5,8 @@ export type Config = {
   openrouterApiKey?: string;
   oauthStateSecret: string;
   tokenEncryptionKey: string;
+  /** Per-run transform time limit for saved/draft Pearls (SANDBOX_TIMEOUT_MS). */
+  sandboxTimeoutMs: number;
 };
 
 type Env = Record<string, string | undefined>;
@@ -33,6 +35,7 @@ export function loadConfig(env: Env = process.env): Config {
     openrouterApiKey: nonEmpty(env.OPENROUTER_API_KEY),
     oauthStateSecret: secret("OAUTH_STATE_SECRET"),
     tokenEncryptionKey: parseEncryptionKey(secret("TOKEN_ENCRYPTION_KEY")),
+    sandboxTimeoutMs: parseSandboxTimeout(env.SANDBOX_TIMEOUT_MS),
   };
 }
 
@@ -61,4 +64,14 @@ function parsePort(raw: string | undefined): number {
     throw new Error(`Invalid PORT "${value}": expected an integer between 0 and 65535.`);
   }
   return port;
+}
+
+function parseSandboxTimeout(raw: string | undefined): number {
+  const value = nonEmpty(raw);
+  if (value === undefined) return 1000;
+  const ms = Number(value);
+  if (!Number.isInteger(ms) || ms <= 0) {
+    throw new Error(`Invalid SANDBOX_TIMEOUT_MS "${value}": expected a positive integer (milliseconds).`);
+  }
+  return ms;
 }

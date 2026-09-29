@@ -1,5 +1,7 @@
 import type { Builtin } from "../sources/builtins.ts";
+import { gbfs } from "./gbfs.ts";
 import { mta } from "./mta.ts";
+import { weather } from "./weather.ts";
 
 // Each built-in adds one import and one entry here.
-export const BUILTINS: Builtin[] = [mta];
+export const BUILTINS: Builtin[] = [gbfs, weather, mta];

@@ -82,6 +82,7 @@ export const MIGRATIONS: readonly Migration[] = [
         user_id TEXT NOT NULL,
         provider TEXT NOT NULL,
         code_verifier TEXT,
+        browser_binding_hash TEXT NOT NULL,
         expires_at TEXT NOT NULL,
         used INTEGER NOT NULL DEFAULT 0 CHECK (used IN (0, 1))
       );

@@ -59,19 +59,22 @@ export class OAuthTokenStore {
   }
 
   /**
-   * A usable credential, refreshing (and persisting) an expired token when the
-   * provider supports it. Null when absent, undecryptable, or expired and not
-   * refreshable.
+   * A usable credential, refreshing (and persisting) a token that is expired or
+   * about to expire when the provider supports it. If that refresh isn't possible
+   * or fails, a not-yet-expired token is still returned. Null when absent,
+   * undecryptable, or expired and not refreshable.
    */
   async get(userId: string, provider: string): Promise<AuthCredential | null> {
     const token = this.#read(userId, provider);
     if (!token) return null;
-    if (!token.expiresAt || Date.parse(token.expiresAt) - EXPIRY_SKEW_MS > this.#now()) {
-      return { provider, accessToken: token.accessToken };
-    }
+    const current = { provider, accessToken: token.accessToken };
+    if (!token.expiresAt) return current;
+    const expiresAt = Date.parse(token.expiresAt);
+    if (expiresAt - EXPIRY_SKEW_MS > this.#now()) return current;
+    const fallback = (): AuthCredential | null => (expiresAt > this.#now() ? current : null);
 
     const adapter = this.#adapters.get(provider);
-    if (!adapter?.refresh || !token.refreshToken) return null;
+    if (!adapter?.refresh || !token.refreshToken) return fallback();
     // Concurrent refreshes of the same token would race and may invalidate each other's refresh token.
     const key = `${userId}\u0000${provider}`;
     const inflight = this.#refreshing.get(key);
@@ -83,7 +86,7 @@ export class OAuthTokenStore {
         this.save(userId, provider, fresh);
         return { provider, accessToken: fresh.accessToken };
       })
-      .catch(() => null)
+      .catch(fallback)
       .finally(() => this.#refreshing.delete(key));
     this.#refreshing.set(key, pending);
     return pending;

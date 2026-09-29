@@ -1,7 +1,9 @@
 export { type OAuth2Config, codeChallenge, createCodeVerifier, oauth2Adapter } from "./oauth2.ts";
 export { loadProviders, type OAuthEnv, PROVIDER_FACTORIES, type ProviderFactory } from "./providers/index.ts";
 export {
+  type ConsumedNonce,
   createOAuthStartUrl,
+  type NonceFailure,
   OAuthNonceStore,
   oauthRedirectUri,
   STATE_TTL_MS,

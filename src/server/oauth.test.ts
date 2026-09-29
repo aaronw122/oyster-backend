@@ -62,16 +62,21 @@ const pathOf = (url: string) => {
   const u = new URL(url);
   return `${u.pathname}${u.search}`;
 };
+const locationCode = (res: Response) => new URL(res.headers.get("location") ?? "").searchParams.get("code");
 
-/** Follows /start and returns the provider authorize URL (asserting a redirect to the provider). */
-async function start(startUrl: string): Promise<URL> {
+/** Runs /start as the browser would: returns the provider authorize URL, the opaque state, and the binding cookie. */
+async function start(startUrl: string) {
   const res = await app.request(pathOf(startUrl));
   expect(res.status).toBe(302);
-  return new URL(res.headers.get("location") ?? "");
+  const authorize = new URL(res.headers.get("location") ?? "");
+  const setCookie = res.headers.get("set-cookie") ?? "";
+  return { authorize, state: authorize.searchParams.get("state") ?? "", setCookie, cookie: setCookie.split(";")[0] ?? "" };
 }
 
-async function callback(provider: string, params: Record<string, string>) {
-  const res = await app.request(`/oauth/${provider}/callback?${new URLSearchParams(params)}`);
+async function callback(provider: string, params: Record<string, string>, cookie?: string) {
+  const res = await app.request(`/oauth/${provider}/callback?${new URLSearchParams(params)}`, {
+    headers: cookie ? { Cookie: cookie } : {},
+  });
   expect(res.status).toBe(302);
   const location = res.headers.get("location") ?? "";
   const url = new URL(location);
@@ -80,13 +85,23 @@ async function callback(provider: string, params: Record<string, string>) {
 }
 
 test("start → callback stores an encrypted token and returns to the app", async () => {
-  const authorize = await start(createOAuthStartUrl(config, "alice", "github", now));
+  const startUrl = createOAuthStartUrl(config, "alice", "github", now);
+  const { authorize, state, setCookie, cookie } = await start(startUrl);
   expect(authorize.origin).toBe("https://github.example");
-  const state = authorize.searchParams.get("state") ?? "";
   expect(authorize.searchParams.get("redirect_uri")).toBe("https://oyster.test/oauth/github/callback");
   expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
+  // The provider only sees an opaque nonce: no user id, no signed app state.
+  expect(state).toMatch(/^[A-Za-z0-9_-]+$/);
+  expect(state).not.toBe(new URL(startUrl).searchParams.get("state"));
+  expect(Buffer.from(state, "base64url").toString("latin1")).not.toContain("alice");
+  // Browser binding cookie.
+  expect(setCookie).toContain("HttpOnly");
+  expect(setCookie).toContain("Secure");
+  expect(setCookie).toContain("SameSite=Lax");
+  expect(setCookie).toContain("Path=/oauth");
+  expect(setCookie).toContain("Max-Age=600");
 
-  const { params } = await callback("github", { code: "auth-code", state });
+  const { params } = await callback("github", { code: "auth-code", state }, cookie);
   expect(params).toEqual({ provider: "github", status: "ok" });
 
   // PKCE: the verifier sent at exchange matches the challenge sent at authorize.
@@ -100,15 +115,27 @@ test("start → callback stores an encrypted token and returns to the app", asyn
   expect(await tokens.resolverFor("alice")("github")).toEqual({ provider: "github", accessToken: "provider-access-token" });
 });
 
+test("callback from a browser that didn't run /start is rejected and stores nothing", async () => {
+  const { state, cookie } = await start(createOAuthStartUrl(config, "alice", "github", now));
+  const cookieName = cookie.split("=")[0] ?? "";
+
+  expect((await callback("github", { code: "c", state })).params.code).toBe("invalid_state");
+  expect((await callback("github", { code: "c", state }, `${cookieName}=forged-value`)).params.code).toBe("invalid_state");
+  expect(tokenRequests).toHaveLength(0);
+  expect(tokens.has("alice", "github")).toBe(false);
+
+  // The failed attempts didn't burn the nonce: the real browser still completes.
+  expect((await callback("github", { code: "c", state }, cookie)).params.status).toBe("ok");
+});
+
 test("a state is single-use at both start and callback", async () => {
   const startUrl = createOAuthStartUrl(config, "alice", "github", now);
-  const state = (await start(startUrl)).searchParams.get("state") ?? "";
+  const { state, cookie } = await start(startUrl);
 
-  const replayStart = await app.request(pathOf(startUrl));
-  expect(new URL(replayStart.headers.get("location") ?? "").searchParams.get("code")).toBe("state_reused");
+  expect(locationCode(await app.request(pathOf(startUrl)))).toBe("state_reused");
 
-  expect((await callback("github", { code: "c", state })).params.status).toBe("ok");
-  expect((await callback("github", { code: "c", state })).params).toEqual({
+  expect((await callback("github", { code: "c", state }, cookie)).params.status).toBe("ok");
+  expect((await callback("github", { code: "c", state }, cookie)).params).toEqual({
     provider: "github",
     status: "error",
     code: "state_reused",
@@ -116,33 +143,33 @@ test("a state is single-use at both start and callback", async () => {
   expect(tokenRequests).toHaveLength(1);
 });
 
-test("tampered, expired and never-started states are rejected without a token exchange", async () => {
+test("tampered, expired and unknown states are rejected without a token exchange", async () => {
   const startUrl = createOAuthStartUrl(config, "alice", "github", now);
-  const state = (await start(startUrl)).searchParams.get("state") ?? "";
+  const signed = new URL(startUrl).searchParams.get("state") ?? "";
+  expect(locationCode(await app.request(`/oauth/github/start?state=${encodeURIComponent(`${signed.slice(0, -3)}AAA`)}`))).toBe(
+    "invalid_state",
+  );
+  expect(locationCode(await app.request("/oauth/github/start"))).toBe("invalid_state");
 
-  const tampered = `${state.slice(0, -3)}AAA`;
-  expect((await callback("github", { code: "c", state: tampered })).params.code).toBe("invalid_state");
-  expect((await callback("github", { code: "c" })).params.code).toBe("invalid_state");
-
-  const neverStarted = new URL(createOAuthStartUrl(config, "alice", "github", now)).searchParams.get("state") ?? "";
-  expect((await callback("github", { code: "c", state: neverStarted })).params.code).toBe("invalid_state");
+  const { state, cookie } = await start(startUrl);
+  expect((await callback("github", { code: "c", state: `${state.slice(0, -3)}AAA` }, cookie)).params.code).toBe("invalid_state");
+  expect((await callback("github", { code: "c" }, cookie)).params.code).toBe("invalid_state");
+  expect((await callback("github", { code: "c", state: "not a nonce!" }, cookie)).params.code).toBe("invalid_state");
 
   now = T0 + STATE_TTL_MS;
-  expect((await callback("github", { code: "c", state })).params.code).toBe("state_expired");
-  const expiredStart = await app.request(pathOf(startUrl));
-  expect(new URL(expiredStart.headers.get("location") ?? "").searchParams.get("code")).toBe("state_expired");
+  expect((await callback("github", { code: "c", state }, cookie)).params.code).toBe("state_expired");
+  expect(locationCode(await app.request(pathOf(createOAuthStartUrl(config, "alice", "github", T0))))).toBe("state_expired");
 
   expect(tokenRequests).toHaveLength(0);
   expect(tokens.has("alice", "github")).toBe(false);
 });
 
-test("a state signed for one provider can't be used with another", async () => {
+test("a state for one provider can't be used with another", async () => {
   const githubStart = new URL(createOAuthStartUrl(config, "alice", "github", now));
-  const res = await app.request(`/oauth/spotify/start${githubStart.search}`);
-  expect(new URL(res.headers.get("location") ?? "").searchParams.get("code")).toBe("provider_mismatch");
+  expect(locationCode(await app.request(`/oauth/spotify/start${githubStart.search}`))).toBe("provider_mismatch");
 
-  const state = (await start(githubStart.toString())).searchParams.get("state") ?? "";
-  expect((await callback("spotify", { code: "c", state })).params).toEqual({
+  const { state, cookie } = await start(githubStart.toString());
+  expect((await callback("spotify", { code: "c", state }, cookie)).params).toEqual({
     provider: "spotify",
     status: "error",
     code: "provider_mismatch",
@@ -151,12 +178,12 @@ test("a state signed for one provider can't be used with another", async () => {
 });
 
 test("provider denial and failed exchanges redirect with a code and leak nothing", async () => {
-  const denyState = (await start(createOAuthStartUrl(config, "alice", "github", now))).searchParams.get("state") ?? "";
-  expect((await callback("github", { error: "access_denied", state: denyState })).params.code).toBe("access_denied");
+  const deny = await start(createOAuthStartUrl(config, "alice", "github", now));
+  expect((await callback("github", { error: "access_denied", state: deny.state }, deny.cookie)).params.code).toBe("access_denied");
 
   tokenResponse = { status: 400, json: { error: "invalid_grant", leaked: "provider-access-token" } };
-  const failState = (await start(createOAuthStartUrl(config, "alice", "github", now))).searchParams.get("state") ?? "";
-  const { location, params } = await callback("github", { code: "c", state: failState });
+  const fail = await start(createOAuthStartUrl(config, "alice", "github", now));
+  const { location, params } = await callback("github", { code: "c", state: fail.state }, fail.cookie);
   expect(params.code).toBe("exchange_failed");
   expect(location).not.toContain("provider-access-token");
   expect(location).not.toContain("github-secret");

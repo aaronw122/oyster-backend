@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import type { Config } from "../config.ts";
 import { isoNow } from "../contract/index.ts";
@@ -61,10 +61,20 @@ export function oauthRedirectUri(config: Config, provider: string): string {
   return `${config.publicBaseUrl}/oauth/${encodeURIComponent(provider)}/callback`;
 }
 
+export type ConsumedNonce = { ok: true; userId: string; codeVerifier: string };
+export type NonceFailure = {
+  ok: false;
+  code: Extract<OAuthErrorCode, "invalid_state" | "state_expired" | "state_reused" | "provider_mismatch">;
+};
+
+const sha256 = (value: string): Buffer => createHash("sha256").update(value).digest();
+
 /**
- * Server-side half of the state: each nonce is claimed once at /start (where its
- * PKCE verifier is recorded) and consumed once at /callback (which hands the
- * verifier back and erases it).
+ * Server-side half of the state. Each nonce is claimed once at /start, which
+ * records who it's for, its PKCE verifier, and the hash of a browser-binding
+ * secret (set as a cookie on the browser that ran /start). /callback consumes it
+ * once, only from that same browser, getting the verifier back and erasing it.
+ * The provider only ever sees the opaque nonce.
  */
 export class OAuthNonceStore {
   readonly #db: Database;
@@ -73,13 +83,14 @@ export class OAuthNonceStore {
     this.#db = db;
   }
 
-  /** Records `payload.nonce` with its PKCE verifier. False if the nonce was already claimed. */
-  claim(payload: StatePayload, codeVerifier: string, now: number = Date.now()): boolean {
+  /** Records `payload.nonce`; returns the browser-binding secret, or null if the nonce was already claimed. */
+  claim(payload: StatePayload, codeVerifier: string, now: number = Date.now()): string | null {
     this.#db.query("DELETE FROM oauth_state_nonces WHERE expires_at <= $now").run({ now: isoNow(new Date(now)) });
+    const browserSecret = randomBytes(32).toString("base64url");
     const result = this.#db
       .query(
-        `INSERT INTO oauth_state_nonces (nonce, user_id, provider, code_verifier, expires_at, used)
-         VALUES ($nonce, $userId, $provider, $codeVerifier, $expiresAt, 0)
+        `INSERT INTO oauth_state_nonces (nonce, user_id, provider, code_verifier, browser_binding_hash, expires_at, used)
+         VALUES ($nonce, $userId, $provider, $codeVerifier, $bindingHash, $expiresAt, 0)
          ON CONFLICT (nonce) DO NOTHING`,
       )
       .run({
@@ -87,32 +98,40 @@ export class OAuthNonceStore {
         userId: payload.userId,
         provider: payload.provider,
         codeVerifier,
+        bindingHash: sha256(browserSecret).toString("hex"),
         expiresAt: isoNow(new Date(payload.exp)),
       });
-    return result.changes === 1;
+    return result.changes === 1 ? browserSecret : null;
   }
 
-  /** Marks the nonce used and returns its PKCE verifier, or the reason it can't be consumed. */
+  /**
+   * Marks `nonce` used and returns its user and PKCE verifier. Requires the
+   * browser-binding secret from /start (constant-time compared) and a matching provider.
+   */
   consume(
-    payload: StatePayload,
+    nonce: string,
+    provider: string,
+    browserSecret: string | undefined,
     now: number = Date.now(),
-  ): { ok: true; codeVerifier: string } | { ok: false; code: Extract<OAuthErrorCode, "invalid_state" | "state_expired" | "state_reused"> } {
-    return this.#db.transaction(() => {
+  ): ConsumedNonce | NonceFailure {
+    return this.#db.transaction((): ConsumedNonce | NonceFailure => {
       const row = this.#db
-        .query<{ user_id: string; provider: string; code_verifier: string | null; expires_at: string; used: number }, { nonce: string }>(
-          "SELECT user_id, provider, code_verifier, expires_at, used FROM oauth_state_nonces WHERE nonce = $nonce",
+        .query<
+          { user_id: string; provider: string; code_verifier: string | null; browser_binding_hash: string; expires_at: string; used: number },
+          { nonce: string }
+        >(
+          "SELECT user_id, provider, code_verifier, browser_binding_hash, expires_at, used FROM oauth_state_nonces WHERE nonce = $nonce",
         )
-        .get({ nonce: payload.nonce });
+        .get({ nonce });
       // No row: /start never ran for this state (or it expired and was pruned).
-      if (!row || row.user_id !== payload.userId || row.provider !== payload.provider) {
-        return { ok: false as const, code: "invalid_state" as const };
-      }
-      if (row.used || !row.code_verifier) return { ok: false as const, code: "state_reused" as const };
-      if (row.expires_at <= isoNow(new Date(now))) return { ok: false as const, code: "state_expired" as const };
-      this.#db
-        .query("UPDATE oauth_state_nonces SET used = 1, code_verifier = NULL WHERE nonce = $nonce")
-        .run({ nonce: payload.nonce });
-      return { ok: true as const, codeVerifier: row.code_verifier };
+      if (!row || !browserSecret) return { ok: false, code: "invalid_state" };
+      const expected = Buffer.from(row.browser_binding_hash, "hex");
+      if (!timingSafeEqual(sha256(browserSecret), expected)) return { ok: false, code: "invalid_state" };
+      if (row.provider !== provider) return { ok: false, code: "provider_mismatch" };
+      if (row.used || !row.code_verifier) return { ok: false, code: "state_reused" };
+      if (row.expires_at <= isoNow(new Date(now))) return { ok: false, code: "state_expired" };
+      this.#db.query("UPDATE oauth_state_nonces SET used = 1, code_verifier = NULL WHERE nonce = $nonce").run({ nonce });
+      return { ok: true, userId: row.user_id, codeVerifier: row.code_verifier };
     })();
   }
 }

@@ -257,4 +257,17 @@ describe("OAuthTokenStore", () => {
     failing.save("alice", "demo", { accessToken: "forever" });
     expect(await failing.get("alice", "demo")).toEqual({ provider: "demo", accessToken: "forever" });
   });
+
+  test("a failed refresh inside the skew window still returns the unexpired token", async () => {
+    const failing = storeWith(
+      refreshingAdapter(async () => {
+        throw new OAuthError("refresh_failed", "nope");
+      }),
+    );
+    failing.save("alice", "demo", { accessToken: "at-1", refreshToken: "rt-1", expiresAt: new Date(T0 + 10_000).toISOString() });
+    expect(await failing.get("alice", "demo")).toEqual({ provider: "demo", accessToken: "at-1" });
+    const noRefresh = storeWith();
+    noRefresh.save("alice", "demo", { accessToken: "at-1", expiresAt: new Date(T0 + 10_000).toISOString() });
+    expect(await noRefresh.get("alice", "demo")).toEqual({ provider: "demo", accessToken: "at-1" });
+  });
 });

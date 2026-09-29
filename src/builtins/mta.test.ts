@@ -88,9 +88,23 @@ describe("mta builtin: decode + filter", () => {
     expect(express.arrivals).toEqual(local.arrivals);
   });
 
-  test("a route that does not serve the stop yields no trains", async () => {
-    const result = await arrivals({ route: "L", stop: "626N" }, L_RECORDED_AT);
-    expect(result.arrivals).toEqual([]);
+  test("canceled and deleted trips are dropped", async () => {
+    const before = await arrivals({ route: "L", stop: "L08N", limit: "20" }, L_RECORDED_AT);
+    const [canceled, deleted] = before.arrivals.map((arrival) => arrival.tripId);
+    const message = transit_realtime.FeedMessage.decode(L_FEED);
+    const Relationship = transit_realtime.TripDescriptor.ScheduleRelationship;
+    for (const entity of message.entity) {
+      const trip = entity.tripUpdate?.trip;
+      if (!trip) continue;
+      if (trip.tripId === canceled) trip.scheduleRelationship = Relationship.CANCELED;
+      if (trip.tripId === deleted) trip.scheduleRelationship = Relationship.DELETED;
+    }
+    const edited = transit_realtime.FeedMessage.encode(message).finish();
+
+    const after = await arrivals({ route: "L", stop: "L08N", limit: "20" }, L_RECORDED_AT, edited);
+    expect(after.arrivals.map((arrival) => arrival.tripId)).toEqual(
+      before.arrivals.map((arrival) => arrival.tripId).filter((id) => id !== canceled && id !== deleted),
+    );
   });
 });
 
@@ -111,6 +125,12 @@ describe("mta builtin: errors", () => {
   test("unknown stop id is invalid_params", async () => {
     const error = await sourceError(arrivals({ route: "L", stop: "Z99N" }, L_RECORDED_AT));
     expect(error.kind).toBe("invalid_params");
+  });
+
+  test("a line that doesn't stop at the station is invalid_params naming the lines that do", async () => {
+    const error = await sourceError(arrivals({ route: "L", stop: "626N" }, L_RECORDED_AT));
+    expect(error.kind).toBe("invalid_params");
+    expect(error.message).toBe("The L train doesn't stop at 86 St; lines there: 4, 5, 6.");
   });
 
   test("a body that is not GTFS-realtime is a parse error", async () => {
@@ -150,6 +170,20 @@ describe("mta builtin: feed cache", () => {
     clock += 20_000;
     await builtin.fetch({ route: "L", stop: "L08N" }, ctx(fake.fetch, cache));
     expect(fake.urls).toHaveLength(2);
+  });
+});
+
+describe("mta lookup", () => {
+  test("station name → lines and both directional stop ids", async () => {
+    const matches = await mta.lookup?.("bedford av");
+    expect(matches).toContainEqual({
+      name: "Bedford Av",
+      routes: ["L"],
+      stops: [
+        { stop: "L08N", towards: "Manhattan" },
+        { stop: "L08S", towards: "Outbound" },
+      ],
+    });
   });
 });
 

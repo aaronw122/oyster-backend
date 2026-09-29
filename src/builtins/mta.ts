@@ -47,7 +47,7 @@ type FeedStop = { routeId: string; tripId: string; stopId: string; time: number 
 type FeedSnapshot = { timestamp: number; stops: FeedStop[] };
 
 const StopTimeSkipped = transit_realtime.TripUpdate.StopTimeUpdate.ScheduleRelationship.SKIPPED;
-const TripCanceled = transit_realtime.TripDescriptor.ScheduleRelationship.CANCELED;
+const TripRelationship = transit_realtime.TripDescriptor.ScheduleRelationship;
 
 const paramsSchema = z.object({
   route: z.string().trim().min(1),
@@ -62,7 +62,7 @@ const paramsSchema = z.object({
 const description = [
   "Live New York City subway arrivals (MTA) for one line at one platform.",
   "Params: `route` = subway line, e.g. L, A, 6, GS (42 St shuttle), FS (Franklin Av shuttle), H (Rockaway Park shuttle), SI (Staten Island Railway); express variants like 6X count as their line.",
-  "`stop` = MTA stop id WITH a direction letter: the station id plus N or S, e.g. L08N = Bedford Av, trains toward Manhattan; L08S = Bedford Av, trains away from Manhattan. Each direction's destination label is returned as `stop.towards`. Look up station ids by name with the MTA stop finder.",
+  "`stop` = MTA stop id WITH a direction letter: the station id plus N or S, e.g. L08N = Bedford Av, trains toward Manhattan; L08S = Bedford Av, trains away from Manhattan. Each direction's destination label is returned as `stop.towards`. Stop ids can be looked up by station name via this builtin's lookup, which lists each station's lines and both directional stop ids.",
   "`limit` = how many upcoming trains to return (default 5, max 20).",
   "Returns: { route, stop: { id, name, direction: \"N\"|\"S\", towards }, feedTimestamp (ISO time), arrivals: [{ route, tripId, arrivalTime (ISO time), minutesAway (whole minutes, 0 = now) }] } — arrivals are soonest first and only include trains still to come; empty when none are scheduled.",
 ].join(" ");
@@ -74,6 +74,13 @@ export function createMta(deps: { now?: () => number } = {}): Builtin {
     name: "mta",
     description,
     params: paramsSchema,
+    ttlMs: FEED_TTL_MS,
+    lookup: (query) =>
+      findMtaStops(query).map((match) => ({
+        name: match.name,
+        routes: match.routes,
+        stops: match.platforms.map((platform) => ({ stop: platform.stop, towards: platform.towards })),
+      })),
     async fetch(params, ctx) {
       const route = baseLine(params.route ?? "");
       const feedUrl = feedUrlForLine(route);
@@ -83,7 +90,7 @@ export function createMta(deps: { now?: () => number } = {}): Builtin {
           `"${params.route}" isn't an NYC subway line. Lines: ${MTA_LINES.join(", ")}.`,
         );
       }
-      const stop = resolveStop(params.stop ?? "");
+      const stop = resolveStop(params.stop ?? "", route);
       const limit = params.limit === undefined ? DEFAULT_LIMIT : Number(params.limit);
 
       const feed = await loadFeed(route, feedUrl, ctx);
@@ -113,12 +120,18 @@ export function createMta(deps: { now?: () => number } = {}): Builtin {
 
 export const mta: Builtin = createMta();
 
-function resolveStop(raw: string): MtaArrivals["stop"] {
+function resolveStop(raw: string, route: string): MtaArrivals["stop"] {
   const id = raw.trim().toUpperCase();
   const direction = id.at(-1);
   const stationId = id.slice(0, -1);
   const station = STATIONS[stationId];
   if (station && (direction === "N" || direction === "S")) {
+    if (!station.routes.includes(route)) {
+      throw new SourceError(
+        "invalid_params",
+        `The ${route} train doesn't stop at ${station.name}; lines there: ${station.routes.join(", ")}.`,
+      );
+    }
     return { id, name: station.name, direction, towards: direction === "N" ? station.north : station.south };
   }
   const bare = STATIONS[id];
@@ -161,7 +174,10 @@ export function decodeFeed(bytes: Uint8Array, route: string): FeedSnapshot {
   const stops: FeedStop[] = [];
   for (const entity of message.entity) {
     const update = entity.tripUpdate;
-    if (!update || entity.isDeleted || update.trip.scheduleRelationship === TripCanceled) continue;
+    if (!update || entity.isDeleted) continue;
+    // CANCELED and DELETED trips will not run.
+    const relationship = update.trip.scheduleRelationship;
+    if (relationship === TripRelationship.CANCELED || relationship === TripRelationship.DELETED) continue;
     const routeId = update.trip.routeId ?? "";
     const tripId = update.trip.tripId ?? "";
     for (const stopTime of update.stopTimeUpdate ?? []) {

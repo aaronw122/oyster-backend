@@ -11,6 +11,7 @@ export interface SourceCache {
 
 export type SourceErrorKind =
   | "template"
+  | "forbidden_url"
   | "auth_missing"
   | "http"
   | "network"

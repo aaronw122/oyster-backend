@@ -1,10 +1,12 @@
 import type { Pearl, PearlSource } from "../contract/index.ts";
 import { type Builtin, type BuiltinContext, getBuiltin } from "./builtins.ts";
 import { fillInputs, fillTemplate } from "./template.ts";
+import { assertPublicUrl, type HostResolver, resolveHostWithDns } from "./url-guard.ts";
 import { type AuthCredential, type AuthResolver, type SourceCache, SourceError, type SourceErrorKind } from "./types.ts";
 
 const DEFAULT_TTL_MS = 30_000;
 const DEFAULT_TIMEOUT_MS = 8_000;
+const MAX_REDIRECTS = 3;
 
 export type FetchSourcesResult =
   | { ok: true; data: Record<string, unknown> }
@@ -17,6 +19,8 @@ export type FetchSourcesDeps = {
   defaultTtlMs?: number;
   /** Per-request timeout for URL sources; default 8s. */
   timeoutMs?: number;
+  /** DNS resolver for the URL-source SSRF guard; defaults to system DNS. */
+  resolveHost?: HostResolver;
   /** Builtin lookup override (tests); defaults to the shared registry. */
   builtins?: readonly Builtin[];
   /** Env passed to builtins; defaults to `process.env`. */
@@ -130,17 +134,34 @@ async function runBuiltin(
 }
 
 async function getJson(url: string, auth: AuthCredential | null, deps: FetchSourcesDeps): Promise<unknown> {
-  const headers: Record<string, string> = { Accept: "application/json" };
-  if (auth) headers.Authorization = `Bearer ${auth.accessToken}`;
+  const resolveHost = deps.resolveHost ?? resolveHostWithDns;
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  // Explicit controller + ref'd timer: the deadline covers headers and body,
-  // and fires even when nothing else keeps the event loop alive.
+  // Explicit controller + ref'd timer: one deadline covers every redirect hop
+  // and the body, and fires even when nothing else keeps the event loop alive.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let text: string;
   try {
-    const response = await (deps.fetch ?? fetch)(url, { method: "GET", headers, signal: controller.signal });
+    let target = await assertPublicUrl(url, resolveHost);
+    const authOrigin = target.origin;
+    let response: Response;
+    for (let redirects = 0; ; redirects++) {
+      const headers: Record<string, string> = { Accept: "application/json" };
+      // Like browsers, never forward the credential to a different origin.
+      if (auth && target.origin === authOrigin) headers.Authorization = `Bearer ${auth.accessToken}`;
+      response = await (deps.fetch ?? fetch)(target.href, {
+        method: "GET",
+        headers,
+        redirect: "manual",
+        signal: controller.signal,
+      });
+      const location = response.status >= 300 && response.status < 400 ? response.headers.get("location") : null;
+      if (location === null) break;
+      await response.body?.cancel();
+      if (redirects === MAX_REDIRECTS) throw new SourceError("http", `GET ${url} redirected more than ${MAX_REDIRECTS} times`);
+      target = await assertPublicUrl(new URL(location, target).href, resolveHost);
+    }
     if (!response.ok) {
       await response.body?.cancel();
       throw new SourceError("http", `GET ${url} returned HTTP ${response.status}`);

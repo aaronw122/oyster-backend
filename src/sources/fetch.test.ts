@@ -8,6 +8,7 @@ import {
   type FetchSourcesDeps,
   fetchSources,
   fillTemplate,
+  type HostResolver,
   SourceError,
 } from "./index.ts";
 
@@ -25,6 +26,8 @@ function fakeFetch(respond: (url: string) => Response | Promise<Response> = () =
   return { fn, calls };
 }
 
+// Every test host "resolves" to a public TEST-NET-3 address; no real DNS.
+const publicDns: HostResolver = async () => ["203.0.113.10"];
 const noAuth: AuthResolver = async () => null;
 const withToken: AuthResolver = async (provider) => ({ provider, accessToken: TOKEN });
 
@@ -60,7 +63,7 @@ describe("fetchSources: URL sources", () => {
         inputs: { stop: "A/B" },
         sources: [urlSource("https://x.test/stops/{inputs.stop}", { id: "stop" }), urlSource("https://y.test/", { id: "y" })],
       },
-      { resolveAuth: noAuth, fetch: fn },
+      { resolveHost: publicDns, resolveAuth: noAuth, fetch: fn },
     );
     expect(result).toEqual({
       ok: true,
@@ -74,7 +77,7 @@ describe("fetchSources: URL sources", () => {
     const { fn, calls } = fakeFetch();
     const result = await fetchSources(
       { inputs: {}, sources: [urlSource("https://x.test/{secrets.key}")] },
-      { resolveAuth: noAuth, fetch: fn },
+      { resolveHost: publicDns, resolveAuth: noAuth, fetch: fn },
     );
     expect(result).toMatchObject({ ok: false, error: { sourceId: "s", kind: "template" } });
     expect(calls).toHaveLength(0);
@@ -86,7 +89,7 @@ describe("fetchSources: URL sources", () => {
     const result = await fetchSources(
       { inputs: {}, sources: [urlSource("https://api.test/me", { auth: { provider: "plaid" } })] },
       {
-        resolveAuth: async (provider) => {
+        resolveHost: publicDns, resolveAuth: async (provider) => {
           requested.push(provider);
           return { provider, accessToken: TOKEN };
         },
@@ -102,7 +105,7 @@ describe("fetchSources: URL sources", () => {
     const { fn, calls } = fakeFetch();
     const result = await fetchSources(
       { inputs: {}, sources: [urlSource("https://api.test/me", { auth: { provider: "plaid" } })] },
-      { resolveAuth: noAuth, fetch: fn },
+      { resolveHost: publicDns, resolveAuth: noAuth, fetch: fn },
     );
     expect(result).toMatchObject({ ok: false, error: { kind: "auth_missing" } });
     expect(calls).toHaveLength(0);
@@ -110,7 +113,7 @@ describe("fetchSources: URL sources", () => {
 
   test("non-2xx → http with status, not body", async () => {
     const { fn } = fakeFetch(() => new Response("upstream says: internal detail", { status: 503 }));
-    const result = await fetchSources({ inputs: {}, sources: [urlSource("https://x.test/")] }, { resolveAuth: noAuth, fetch: fn });
+    const result = await fetchSources({ inputs: {}, sources: [urlSource("https://x.test/")] }, { resolveHost: publicDns, resolveAuth: noAuth, fetch: fn });
     expect(result).toMatchObject({ ok: false, error: { kind: "http" } });
     if (result.ok) throw new Error("unreachable");
     expect(result.error.message).toContain("503");
@@ -119,7 +122,7 @@ describe("fetchSources: URL sources", () => {
 
   test("invalid JSON → parse", async () => {
     const { fn } = fakeFetch(() => new Response("<html>nope</html>", { status: 200 }));
-    const result = await fetchSources({ inputs: {}, sources: [urlSource("https://x.test/")] }, { resolveAuth: noAuth, fetch: fn });
+    const result = await fetchSources({ inputs: {}, sources: [urlSource("https://x.test/")] }, { resolveHost: publicDns, resolveAuth: noAuth, fetch: fn });
     expect(result).toMatchObject({ ok: false, error: { kind: "parse" } });
   });
 
@@ -127,7 +130,7 @@ describe("fetchSources: URL sources", () => {
     const { fn } = fakeFetch(() => {
       throw new TypeError("connection refused");
     });
-    const result = await fetchSources({ inputs: {}, sources: [urlSource("https://x.test/")] }, { resolveAuth: noAuth, fetch: fn });
+    const result = await fetchSources({ inputs: {}, sources: [urlSource("https://x.test/")] }, { resolveHost: publicDns, resolveAuth: noAuth, fetch: fn });
     expect(result).toMatchObject({ ok: false, error: { kind: "network" } });
   });
 
@@ -138,7 +141,7 @@ describe("fetchSources: URL sources", () => {
       })) as typeof fetch;
     const result = await fetchSources(
       { inputs: {}, sources: [urlSource("https://x.test/")] },
-      { resolveAuth: noAuth, fetch: hang, timeoutMs: 20 },
+      { resolveHost: publicDns, resolveAuth: noAuth, fetch: hang, timeoutMs: 20 },
     );
     expect(result).toMatchObject({ ok: false, error: { kind: "network" } });
     if (result.ok) throw new Error("unreachable");
@@ -156,7 +159,7 @@ describe("fetchSources: URL sources", () => {
           urlSource("https://x.test/{nope}", { id: "later" }),
         ],
       },
-      { resolveAuth: noAuth, fetch: fn },
+      { resolveHost: publicDns, resolveAuth: noAuth, fetch: fn },
     );
     expect(result).toMatchObject({ ok: false, error: { sourceId: "bad", kind: "http" } });
   });
@@ -167,7 +170,7 @@ describe("fetchSources: URL sources", () => {
     });
     const result = await fetchSources(
       { inputs: {}, sources: [urlSource("https://x.test/", { auth: { provider: "plaid" } })] },
-      { resolveAuth: withToken, fetch: fn },
+      { resolveHost: publicDns, resolveAuth: withToken, fetch: fn },
     );
     expect(result.ok).toBe(false);
     expect(JSON.stringify(result)).not.toContain(TOKEN);
@@ -201,7 +204,7 @@ describe("fetchSources: builtins", () => {
     const { builtin, calls } = fakeBuiltin();
     const result = await fetchSources(
       { inputs: { home: "W 52 St & 6 Ave" }, sources: [builtinSource({ station: "{inputs.home}" })] },
-      { resolveAuth: noAuth, builtins: [builtin] },
+      { resolveHost: publicDns, resolveAuth: noAuth, builtins: [builtin] },
     );
     expect(result).toEqual({ ok: true, data: { b: { station: "W 52 St & 6 Ave", bikes: 3 } } });
     expect(calls).toEqual([{ params: { station: "W 52 St & 6 Ave" }, token: undefined }]);
@@ -210,7 +213,7 @@ describe("fetchSources: builtins", () => {
   test("unknown builtin", async () => {
     const result = await fetchSources(
       { inputs: {}, sources: [{ ...builtinSource({}), builtin: "nope" }] },
-      { resolveAuth: noAuth, builtins: [] },
+      { resolveHost: publicDns, resolveAuth: noAuth, builtins: [] },
     );
     expect(result).toMatchObject({ ok: false, error: { kind: "unknown_builtin" } });
   });
@@ -219,7 +222,7 @@ describe("fetchSources: builtins", () => {
     const { builtin, calls } = fakeBuiltin();
     const result = await fetchSources(
       { inputs: {}, sources: [builtinSource({ station: "" })] },
-      { resolveAuth: noAuth, builtins: [builtin] },
+      { resolveHost: publicDns, resolveAuth: noAuth, builtins: [builtin] },
     );
     expect(result).toMatchObject({ ok: false, error: { kind: "invalid_params" } });
     expect(calls).toHaveLength(0);
@@ -227,13 +230,13 @@ describe("fetchSources: builtins", () => {
 
   test("auth-requiring builtin receives the credential, or fails auth_missing", async () => {
     const { builtin, calls } = fakeBuiltin({ auth: { provider: "plaid" } });
-    const deps: FetchSourcesDeps = { resolveAuth: withToken, builtins: [builtin] };
+    const deps: FetchSourcesDeps = { resolveHost: publicDns, resolveAuth: withToken, builtins: [builtin] };
     expect((await fetchSources({ inputs: {}, sources: [builtinSource({ station: "x" })] }, deps)).ok).toBe(true);
     expect(calls[0]!.token).toBe(TOKEN);
 
     const missing = await fetchSources(
       { inputs: {}, sources: [builtinSource({ station: "x" })] },
-      { resolveAuth: noAuth, builtins: [builtin] },
+      { resolveHost: publicDns, resolveAuth: noAuth, builtins: [builtin] },
     );
     expect(missing).toMatchObject({ ok: false, error: { kind: "auth_missing" } });
   });
@@ -246,7 +249,7 @@ describe("fetchSources: builtins", () => {
     });
     const typedResult = await fetchSources(
       { inputs: {}, sources: [builtinSource({ station: "x" })] },
-      { resolveAuth: noAuth, builtins: [typed.builtin] },
+      { resolveHost: publicDns, resolveAuth: noAuth, builtins: [typed.builtin] },
     );
     expect(typedResult).toMatchObject({ ok: false, error: { kind: "http", message: "upstream 500" } });
 
@@ -258,7 +261,7 @@ describe("fetchSources: builtins", () => {
     });
     const leakyResult = await fetchSources(
       { inputs: {}, sources: [builtinSource({ station: "x" })] },
-      { resolveAuth: withToken, builtins: [leaky.builtin] },
+      { resolveHost: publicDns, resolveAuth: withToken, builtins: [leaky.builtin] },
     );
     expect(leakyResult).toMatchObject({ ok: false, error: { kind: "network" } });
     expect(JSON.stringify(leakyResult)).not.toContain(TOKEN);
@@ -271,7 +274,7 @@ describe("fetchSources: cache", () => {
     const cache = createMemorySourceCache(() => now);
     const { fn, calls } = fakeFetch(() => Response.json({ n: calls.length }));
     const pearl = { inputs: { q: "x" }, sources: [urlSource("https://x.test/?q={inputs.q}")] };
-    const deps: FetchSourcesDeps = { resolveAuth: noAuth, fetch: fn, cache, defaultTtlMs: 30_000 };
+    const deps: FetchSourcesDeps = { resolveHost: publicDns, resolveAuth: noAuth, fetch: fn, cache, defaultTtlMs: 30_000 };
 
     expect(await fetchSources(pearl, deps)).toEqual({ ok: true, data: { s: { n: 1 } } });
     now += 29_999;
@@ -288,14 +291,118 @@ describe("fetchSources: cache", () => {
     const source = urlSource("https://x.test/{inputs.q}", { auth: { provider: "p" } });
     const as = (accessToken: string): AuthResolver => async (provider) => ({ provider, accessToken });
 
-    await fetchSources({ inputs: { q: "a" }, sources: [source] }, { resolveAuth: as("t1"), fetch: fn, cache });
-    await fetchSources({ inputs: { q: "b" }, sources: [source] }, { resolveAuth: as("t1"), fetch: fn, cache });
-    await fetchSources({ inputs: { q: "a" }, sources: [source] }, { resolveAuth: as("t2"), fetch: fn, cache });
-    await fetchSources({ inputs: { q: "a" }, sources: [source] }, { resolveAuth: as("t1"), fetch: fn, cache });
+    await fetchSources({ inputs: { q: "a" }, sources: [source] }, { resolveHost: publicDns, resolveAuth: as("t1"), fetch: fn, cache });
+    await fetchSources({ inputs: { q: "b" }, sources: [source] }, { resolveHost: publicDns, resolveAuth: as("t1"), fetch: fn, cache });
+    await fetchSources({ inputs: { q: "a" }, sources: [source] }, { resolveHost: publicDns, resolveAuth: as("t2"), fetch: fn, cache });
+    await fetchSources({ inputs: { q: "a" }, sources: [source] }, { resolveHost: publicDns, resolveAuth: as("t1"), fetch: fn, cache });
     expect(calls).toHaveLength(3);
 
-    await fetchSources({ inputs: { q: "fail" }, sources: [source] }, { resolveAuth: as("t1"), fetch: fn, cache });
-    await fetchSources({ inputs: { q: "fail" }, sources: [source] }, { resolveAuth: as("t1"), fetch: fn, cache });
+    await fetchSources({ inputs: { q: "fail" }, sources: [source] }, { resolveHost: publicDns, resolveAuth: as("t1"), fetch: fn, cache });
+    await fetchSources({ inputs: { q: "fail" }, sources: [source] }, { resolveHost: publicDns, resolveAuth: as("t1"), fetch: fn, cache });
     expect(calls).toHaveLength(5);
+  });
+});
+
+describe("fetchSources: SSRF guard", () => {
+  async function kindFor(url: string, deps: Partial<FetchSourcesDeps> = {}) {
+    const { fn, calls } = fakeFetch();
+    const result = await fetchSources(
+      { inputs: {}, sources: [urlSource(url)] },
+      { resolveHost: publicDns, resolveAuth: noAuth, fetch: fn, ...deps },
+    );
+    return { kind: result.ok ? "ok" : result.error.kind, calls: calls.length };
+  }
+
+  test("rejects non-http schemes and literal non-public hosts before any request", async () => {
+    for (const url of [
+      "file:///tmp/secret.json",
+      "ftp://example.test/x.json",
+      "http://localhost:3000/",
+      "http://api.localhost/",
+      "http://127.0.0.1/",
+      "http://2130706433/", // 127.0.0.1 in decimal form
+      "http://169.254.169.254/latest/meta-data/",
+      "http://10.1.2.3/",
+      "http://172.20.0.1/",
+      "http://192.168.1.1/",
+      "http://0.0.0.0/",
+      "http://[::1]/",
+      "http://[::]/",
+      "http://[::ffff:127.0.0.1]/",
+      "http://[fd00::1]/",
+      "http://[fe80::1]/",
+    ]) {
+      expect({ url, ...(await kindFor(url)) }).toEqual({ url, kind: "forbidden_url", calls: 0 });
+    }
+  });
+
+  test("rejects hostnames that resolve to any non-public address", async () => {
+    const resolveHost: HostResolver = async () => ["203.0.113.10", "10.0.0.5"];
+    expect(await kindFor("https://sneaky.test/data.json", { resolveHost })).toEqual({ kind: "forbidden_url", calls: 0 });
+  });
+
+  test("allows public literal IPs and public resolved hosts", async () => {
+    expect(await kindFor("https://8.8.8.8/x.json")).toEqual({ kind: "ok", calls: 1 });
+    expect(await kindFor("https://[2606:4700::1111]/x.json")).toEqual({ kind: "ok", calls: 1 });
+    expect(await kindFor("https://api.example.test/x.json")).toEqual({ kind: "ok", calls: 1 });
+  });
+
+  test("DNS failure is a network error", async () => {
+    const resolveHost: HostResolver = async () => {
+      throw new Error("ENOTFOUND");
+    };
+    expect(await kindFor("https://nowhere.test/", { resolveHost })).toEqual({ kind: "network", calls: 0 });
+  });
+
+  test("follows public redirects, re-validating each hop", async () => {
+    const resolveHost: HostResolver = async (host) => (host === "internal.test" ? ["192.168.0.10"] : ["203.0.113.10"]);
+    const { fn, calls } = fakeFetch((url) => {
+      if (url === "https://a.test/start") return new Response(null, { status: 302, headers: { Location: "/next" } });
+      if (url === "https://a.test/next") return new Response(null, { status: 301, headers: { Location: "https://b.test/final" } });
+      if (url === "https://b.test/final") return Response.json({ done: true });
+      return new Response(null, { status: 302, headers: { Location: "http://internal.test/admin" } });
+    });
+    const run = (url: string) =>
+      fetchSources(
+        { inputs: {}, sources: [urlSource(url, { auth: { provider: "p" } })] },
+        { resolveHost, resolveAuth: withToken, fetch: fn },
+      );
+
+    expect(await run("https://a.test/start")).toEqual({ ok: true, data: { s: { done: true } } });
+    expect(calls.map((call) => [call.url, call.headers.Authorization !== undefined])).toEqual([
+      ["https://a.test/start", true],
+      ["https://a.test/next", true],
+      ["https://b.test/final", false], // credential is not forwarded cross-origin
+    ]);
+
+    calls.length = 0;
+    expect(await run("https://a.test/to-internal")).toMatchObject({ ok: false, error: { kind: "forbidden_url" } });
+    expect(calls.map((call) => call.url)).toEqual(["https://a.test/to-internal"]);
+  });
+
+  test("redirect to the metadata host or a file URL is forbidden", async () => {
+    for (const location of ["http://169.254.169.254/latest/meta-data/", "file:///etc/passwd"]) {
+      const { fn } = fakeFetch((url) =>
+        url === "https://a.test/" ? new Response(null, { status: 302, headers: { Location: location } }) : Response.json({}),
+      );
+      const result = await fetchSources(
+        { inputs: {}, sources: [urlSource("https://a.test/")] },
+        { resolveHost: publicDns, resolveAuth: noAuth, fetch: fn },
+      );
+      expect(result).toMatchObject({ ok: false, error: { kind: "forbidden_url" } });
+    }
+  });
+
+  test("more than 3 redirects is an http error", async () => {
+    const { fn, calls } = fakeFetch((url) => {
+      const n = Number(new URL(url).searchParams.get("n") ?? 0);
+      return new Response(null, { status: 302, headers: { Location: `https://a.test/?n=${n + 1}` } });
+    });
+    const result = await fetchSources(
+      { inputs: {}, sources: [urlSource("https://a.test/")] },
+      { resolveHost: publicDns, resolveAuth: noAuth, fetch: fn },
+    );
+    expect(result).toMatchObject({ ok: false, error: { kind: "http" } });
+    expect(calls).toHaveLength(4);
   });
 });

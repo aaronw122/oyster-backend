@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import type { Hono } from "hono";
 import { MockLanguageModelV4 } from "ai/test";
 import { createTestEnv, type Script, scriptedModel, TEST_CONFIG, type TestEnv } from "../agent/testing.ts";
-import { ApiErrorSchema, type ChatEvent, ChatEventSchema } from "../contract/index.ts";
+import { type ChatEvent, ChatEventSchema } from "../contract/index.ts";
 import { type AppEnv, createApp } from "./app.ts";
+import { expectApiError as expectError } from "./testing.ts";
 
 let env: TestEnv;
 let alice: string;
@@ -27,10 +28,10 @@ function appWith(model: MockLanguageModelV4 | undefined, config = TEST_CONFIG): 
   });
 }
 
-const post = (app: Hono<AppEnv>, token: string | null, body: unknown) =>
+const post = (app: Hono<AppEnv>, token: string, body: unknown) =>
   app.request("/messages", {
     method: "POST",
-    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
 
@@ -48,15 +49,10 @@ async function events(res: Response): Promise<ChatEvent[]> {
     });
 }
 
-async function expectError(res: Response, status: number, code: string) {
-  expect(res.status).toBe(status);
-  expect(ApiErrorSchema.parse(await res.json()).error.code).toBe(code);
-}
-
 describe("POST /messages", () => {
-  test("requires a bearer token and a valid body", async () => {
+  // Missing/invalid bearer tokens on /messages are covered with the other routes in app.test.ts.
+  test("rejects malformed or incomplete bodies", async () => {
     const app = appWith(scriptedModel([{ text: "Hi." }]));
-    await expectError(await post(app, null, { sessionId: "s", message: "hi" }), 401, "unauthorized");
     await expectError(await post(app, alice, "{nope"), 400, "invalid_request");
     await expectError(await post(app, alice, { sessionId: "s" }), 400, "invalid_request");
     await expectError(await post(app, alice, { sessionId: "", message: "hi" }), 400, "invalid_request");

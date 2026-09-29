@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { transit_realtime } from "gtfs-realtime-bindings";
 import { isoNow } from "../contract/index.ts";
-import { fitAllSizes, runTransform } from "../sandbox/index.ts";
-import type { BuiltinContext } from "../sources/builtins.ts";
-import { createMemorySourceCache, fetchSources, SourceError } from "../sources/index.ts";
+import { runTransform } from "../sandbox/index.ts";
+import { createMemorySourceCache } from "../sources/index.ts";
 import { createMta, findMtaStops, mta, type MtaArrivals } from "./mta.ts";
 import { mtaExample } from "./mta.example.ts";
+import { builtinContext, expectFitsAllSizes, offlineFetch, recordingFetch, renderExample, sourceError } from "./testing.ts";
 import stationsJson from "./data/mta-stops.json";
 
 const FIXTURES = `${import.meta.dir}/__fixtures__/mta`;
@@ -16,31 +16,13 @@ const NOT_A_FEED = await Bun.file(`${FIXTURES}/not-a-feed.xml`).text();
 /** Feed header time of the recorded L feed, in ms: the "now" of the recording. */
 const L_RECORDED_AT = Number(transit_realtime.FeedMessage.decode(L_FEED).header.timestamp) * 1000;
 
-function feedFetch(body: Uint8Array | string, status = 200) {
-  const urls: string[] = [];
-  const fakeFetch = (async (input: string | URL | Request) => {
-    urls.push(String(input));
-    return new Response(body, { status });
-  }) as unknown as typeof fetch; // test double: only the call shape used by the builtin
-  return { fetch: fakeFetch, urls };
-}
+const feedFetch = (body: Uint8Array | string, status = 200) => recordingFetch(() => new Response(body, { status }));
 
-function ctx(fetchImpl: typeof fetch, cache = createMemorySourceCache()): BuiltinContext {
-  return { fetch: fetchImpl, auth: null, cache, env: {} };
-}
+const ctx = (fetchImpl: typeof fetch, cache = createMemorySourceCache()) => builtinContext(fetchImpl, { cache });
 
 async function arrivals(params: Record<string, string>, now: number, body: Uint8Array | string = L_FEED) {
   const result = await createMta({ now: () => now }).fetch(params, ctx(feedFetch(body).fetch));
   return result as MtaArrivals;
-}
-
-async function sourceError(promise: Promise<unknown>): Promise<SourceError> {
-  const error = await promise.then(
-    () => undefined,
-    (reason: unknown) => reason,
-  );
-  if (!(error instanceof SourceError)) throw new Error(`expected SourceError, got ${String(error)}`);
-  return error;
 }
 
 describe("mta builtin: decode + filter", () => {
@@ -147,11 +129,7 @@ describe("mta builtin: errors", () => {
   });
 
   test("a network failure is reported as network", async () => {
-    const failing = (async () => {
-      throw new TypeError("fetch failed");
-    }) as unknown as typeof fetch; // test double
-    const error = await sourceError(mta.fetch({ route: "L", stop: "L08N" }, ctx(failing)));
-    expect(error.kind).toBe("network");
+    await sourceError(mta.fetch({ route: "L", stop: "L08N" }, ctx(offlineFetch)), "network");
   });
 });
 
@@ -164,12 +142,12 @@ describe("mta builtin: feed cache", () => {
 
     await builtin.fetch({ route: "L", stop: "L08N" }, ctx(fake.fetch, cache));
     await builtin.fetch({ route: "L", stop: "L06S" }, ctx(fake.fetch, cache));
-    expect(fake.urls).toHaveLength(1);
-    expect(fake.urls[0]).toEndWith("nyct%2Fgtfs-l");
+    expect(fake.calls).toHaveLength(1);
+    expect(fake.calls[0]!.url.href).toEndWith("nyct%2Fgtfs-l");
 
     clock += 20_000;
     await builtin.fetch({ route: "L", stop: "L08N" }, ctx(fake.fetch, cache));
-    expect(fake.urls).toHaveLength(2);
+    expect(fake.calls).toHaveLength(2);
   });
 });
 
@@ -221,23 +199,13 @@ describe("findMtaStops", () => {
 
 describe("mta example Pearl", () => {
   test("recorded feed → fetchSources → transform fits every size", async () => {
-    const fake = feedFetch(L_FEED);
-    const fetched = await fetchSources(mtaExample, {
-      resolveAuth: async () => null,
-      fetch: fake.fetch,
+    const output = await renderExample(mtaExample, {
+      fetch: feedFetch(L_FEED).fetch,
       builtins: [createMta({ now: () => L_RECORDED_AT })],
-      env: {},
     });
-    if (!fetched.ok) throw new Error(fetched.error.message);
-
-    const run = await runTransform(mtaExample.transform, fetched.data, mtaExample.inputs);
-    if (!run.ok) throw new Error(run.error.message);
-    expect(run.output.value).toMatch(/^L (now|in \d+ min)$/);
-    expect(run.output.subtitle).toMatch(/^then [\d, ]+ min$/);
-    expect(run.output.items?.[0]?.label).toBe("L to Manhattan");
-    for (const [size, fit] of Object.entries(fitAllSizes(run.output))) {
-      expect({ size, ok: fit.ok }).toEqual({ size, ok: true });
-    }
+    expect(output.value).toMatch(/^L (now|in \d+ min)$/);
+    expect(output.subtitle).toMatch(/^then [\d, ]+ min$/);
+    expect(output.items?.[0]?.label).toBe("L to Manhattan");
   });
 
   const longest = (values: string[]) => values.reduce((a, b) => ([...b].length > [...a].length ? b : a));
@@ -265,9 +233,7 @@ describe("mta example Pearl", () => {
     };
     const run = await runTransform(mtaExample.transform, sources, mtaExample.inputs);
     if (!run.ok) throw new Error(run.error.message);
-    for (const [size, fit] of Object.entries(fitAllSizes(run.output))) {
-      expect({ size, fit }).toEqual({ size, fit: { ok: true, output: expect.anything() } });
-    }
+    expectFitsAllSizes(run.output);
   });
 });
 

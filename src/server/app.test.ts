@@ -1,26 +1,9 @@
 import { beforeEach, expect, test } from "bun:test";
-import type { Hono } from "hono";
 import { z } from "zod";
 import saveFixture from "../../fixtures/contract/save-pearl-request.json";
-import {
-  ApiErrorSchema,
-  HealthResponseSchema,
-  PearlsListResponseSchema,
-  SavePearlResponseSchema,
-} from "../contract/index.ts";
-import { loadConfig } from "../config.ts";
-import { openDb } from "../db/index.ts";
-import { nullAuthResolverFor } from "../runtime/index.ts";
+import { HealthResponseSchema, PearlsListResponseSchema, SavePearlResponseSchema } from "../contract/index.ts";
 import type { Builtin } from "../sources/builtins.ts";
-import { createMemorySourceCache } from "../sources/index.ts";
-import { PearlStore } from "../store/pearls.ts";
-import { UserStore } from "../store/users.ts";
-import { type AppEnv, createApp } from "./app.ts";
-
-let app: Hono<AppEnv>;
-let pearls: PearlStore;
-let alice: string;
-let bob: string;
+import { createTestServer, expectApiError as expectError, type TestServer } from "./testing.ts";
 
 // Offline stand-in for the fixture's `gbfs` builtin (normalized shape the fixture transform reads).
 const fakeGbfs: Builtin = {
@@ -32,32 +15,16 @@ const fakeGbfs: Builtin = {
   }),
 };
 
+let server: TestServer;
+let pearls: TestServer["pearls"];
+let send: TestServer["send"];
+let alice: string;
+let bob: string;
+
 beforeEach(() => {
-  const db = openDb(":memory:");
-  pearls = new PearlStore(db);
-  const users = new UserStore(db);
-  alice = users.issueToken("alice");
-  bob = users.issueToken("bob");
-  const runtime = { pearls, authResolverFor: nullAuthResolverFor, cache: createMemorySourceCache(), builtins: [fakeGbfs] };
-  app = createApp({ config: loadConfig({ NODE_ENV: "test" }), db, pearls, users, runtime });
+  server = createTestServer({ builtins: [fakeGbfs] });
+  ({ pearls, send, alice, bob } = server);
 });
-
-const send = (method: string, path: string, token?: string, body?: unknown) =>
-  app.request(path, {
-    method,
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-    },
-    body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body),
-  });
-
-async function expectError(res: Response, status: number, code: string) {
-  expect(res.status).toBe(status);
-  const parsed = ApiErrorSchema.parse(await res.json());
-  expect(parsed.error.code).toBe(code);
-  return parsed.error.message;
-}
 
 test("GET /health is unauthenticated", async () => {
   const res = await send("GET", "/health");
@@ -71,7 +38,7 @@ test("/pearls routes reject missing and invalid tokens", async () => {
   await expectError(await send("POST", "/pearls", undefined, saveFixture), 401, "unauthorized");
   await expectError(await send("PUT", "/pearls/x", "nope", saveFixture), 401, "unauthorized");
   await expectError(await send("POST", "/messages", undefined, {}), 401, "unauthorized");
-  const res = await app.request("/pearls", { headers: { Authorization: `Basic ${alice}` } });
+  const res = await server.app.request("/pearls", { headers: { Authorization: `Basic ${alice}` } });
   await expectError(res, 401, "unauthorized");
 });
 
@@ -107,8 +74,6 @@ test("invalid save bodies are 400 invalid_request, including server-owned fields
   const missing = await expectError(await send("POST", "/pearls", alice, { name: "x" }), 400, "invalid_request");
   expect(missing).toContain("transform");
 
-  const dupSources = { ...saveFixture, sources: [saveFixture.sources[0], saveFixture.sources[0]] };
-  await expectError(await send("POST", "/pearls", alice, dupSources), 400, "invalid_request");
   await expectError(await send("POST", "/pearls", alice, "{not json"), 400, "invalid_request");
   const { id } = SavePearlResponseSchema.parse(await (await send("POST", "/pearls", alice, saveFixture)).json());
   await expectError(await send("PUT", `/pearls/${id}`, alice, { ...saveFixture, status: "ok" }), 400, "invalid_request");

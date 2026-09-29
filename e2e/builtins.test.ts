@@ -5,9 +5,8 @@ import { marketsExample } from "../src/builtins/markets.example.ts";
 import { mtaExample } from "../src/builtins/mta.example.ts";
 import { recurseExample } from "../src/builtins/recurse.example.ts";
 import { weatherExample } from "../src/builtins/weather.example.ts";
-import { PearlDataSchema, type SavePearlRequest, SavePearlResponseSchema } from "../src/contract/index.ts";
-import { fitToSize } from "../src/sandbox/index.ts";
-import { LIVE, type LiveServer, SIZES, api, startServer } from "./harness.ts";
+import { type SavePearlRequest, SavePearlResponseSchema } from "../src/contract/index.ts";
+import { LIVE, type LiveServer, api, expectFreshAtEverySize, startServer } from "./harness.ts";
 
 // ENSURE-2: every built-in's example Pearl saves through POST /pearls and refreshes
 // through GET /pearls/:id/data at every size against live data. No LLM involved.
@@ -52,21 +51,8 @@ describe.skipIf(!LIVE)("ENSURE-2: every built-in refreshes through the data endp
         if (saved.status !== 201) throw new Error(`POST /pearls for ${name} → ${saved.status}: ${JSON.stringify(saved.body)}\n${server.logs()}`);
         const { id } = SavePearlResponseSchema.parse(saved.body);
 
-        for (const size of SIZES) {
-          const response = await api(server, "GET", `/pearls/${id}/data?size=${size}`);
-          if (response.status !== 200) throw new Error(`${name} ${size} → ${response.status}: ${JSON.stringify(response.body)}`);
-          const data = PearlDataSchema.parse(response.body);
-          expect(data.pearlId).toBe(id);
-          expect(data.size).toBe(size);
-          expect(data.stale).toBe(false);
-          expect(data.output.value.trim()).not.toBe("");
-          const fit = fitToSize(data.output, size);
-          expect(fit.ok ? [] : fit.errors).toEqual([]);
-          // Sensitive built-ins (e.g. recurse: people's names) are checked, never logged.
-          if (!BUILTINS.find((builtin) => builtin.name === name)?.sensitive) {
-            console.log(`[e2e] ${name} ${size}: ${JSON.stringify(data.output)}`);
-          }
-        }
+        // Sensitive built-ins (e.g. recurse: people's names) are checked, never logged.
+        await expectFreshAtEverySize(server, id, name, !BUILTINS.find((builtin) => builtin.name === name)?.sensitive);
       },
       60_000,
     );

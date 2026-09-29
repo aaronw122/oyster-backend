@@ -4,14 +4,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { lintUserFacingText } from "../src/agent/lint.ts";
-import { type ChatEvent, ChatEventSchema, SIZES } from "../src/contract/index.ts";
+import { type ChatEvent, ChatEventSchema, PearlDataSchema, SIZES } from "../src/contract/index.ts";
 import { type Database, openDb } from "../src/db/index.ts";
+import { fitToSize } from "../src/sandbox/index.ts";
 import { PearlStore } from "../src/store/pearls.ts";
 import { UserStore } from "../src/store/users.ts";
 
 /** Live end-to-end suites run only with `LIVE=1` (real network, and for chat suites a real model). */
 export const LIVE = Boolean(process.env.LIVE);
-export { SIZES };
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 const BOOT_TIMEOUT_MS = 20_000;
@@ -117,6 +117,25 @@ export async function api(server: LiveServer, method: "GET" | "POST", path: stri
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return { status: response.status, body: (await response.json()) as unknown };
+}
+
+/**
+ * GETs `/pearls/:id/data` at every size and asserts fresh, non-empty output that fits.
+ * `log` prints each output; pass false for sensitive data (checked, never logged).
+ */
+export async function expectFreshAtEverySize(server: LiveServer, id: string, label: string, log = true): Promise<void> {
+  for (const size of SIZES) {
+    const response = await api(server, "GET", `/pearls/${id}/data?size=${size}`);
+    if (response.status !== 200) throw new Error(`${label} ${size} → ${response.status}: ${JSON.stringify(response.body)}`);
+    const data = PearlDataSchema.parse(response.body);
+    expect(data.pearlId).toBe(id);
+    expect(data.size).toBe(size);
+    expect(data.stale).toBe(false);
+    expect(data.output.value.trim()).not.toBe("");
+    const fit = fitToSize(data.output, size);
+    expect(fit.ok ? [] : fit.errors).toEqual([]);
+    if (log) console.log(`[e2e] ${label} ${size}: ${JSON.stringify(data.output)}`);
+  }
 }
 
 /**

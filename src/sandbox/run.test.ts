@@ -114,30 +114,24 @@ describe("runTransform", () => {
     expect(message).toContain("8388608");
   });
 
-  test("host capabilities are absent inside the VM", async () => {
+  test("host capabilities and host names are absent inside the VM", async () => {
     const transform = `() => ({
       value: [typeof fetch, typeof require, typeof process, typeof Bun, typeof console, typeof setTimeout, typeof XMLHttpRequest, typeof WebAssembly].join(","),
+      subtitle: Object.getOwnPropertyNames(globalThis).join(","),
     })`;
-    expect(await runTransform(transform, {}, {})).toEqual({
-      ok: true,
-      output: { value: "undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined" },
-    });
+    const result = await runTransform(transform, {}, {});
+    if (!result.ok) throw new Error(result.error.message);
+    expect(result.output.value).toBe("undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined");
+    const names = result.output.subtitle!.split(",");
+    for (const hostName of ["fetch", "require", "process", "Bun", "console", "std", "sources", "inputs", "module", "exports"]) {
+      expect(names).not.toContain(hostName);
+    }
   });
 
   test("calling a host API fails as a runtime error", async () => {
     const message = expectError(await runTransform(`() => { fetch("https://example.com"); return { value: "x" }; }`, {}, {}), "runtime");
     expect(message).toContain("ReferenceError");
     expectError(await runTransform(`() => { globalThis.process.exit(1); }`, {}, {}), "runtime");
-  });
-
-  test("globalThis only exposes language builtins", async () => {
-    const transform = `() => ({ value: Object.getOwnPropertyNames(globalThis).join(",") })`;
-    const result = await runTransform(transform, {}, {});
-    if (!result.ok) throw new Error(result.error.message);
-    const names = result.output.value.split(",");
-    for (const hostName of ["fetch", "require", "process", "Bun", "console", "std", "sources", "inputs", "module", "exports"]) {
-      expect(names).not.toContain(hostName);
-    }
   });
 
   test("state does not leak between runs", async () => {
@@ -174,15 +168,11 @@ describe("runTransform", () => {
 
   test("many sequential runs complete without leaking VM handles", async () => {
     const transform = `(s, i, std) => ({ value: std.formatMoney(s.n * i.k), items: [{ label: std.truncate("station " + s.n, 10) }] })`;
-    const runs = 50;
-    const started = performance.now();
-    for (let n = 0; n < runs; n++) {
+    for (let n = 0; n < 50; n++) {
       const result = await runTransform(transform, { n }, { k: 2 });
       expect(result.ok).toBe(true);
       // Interleave failures: error paths must dispose their handles too.
       expectError(await runTransform(`() => { throw new Error("x") }`, {}, {}), "runtime");
     }
-    const avgMs = (performance.now() - started) / (runs * 2);
-    console.log(`sandbox perf: ${avgMs.toFixed(2)} ms/run avg over ${runs * 2} runs`);
   });
 });

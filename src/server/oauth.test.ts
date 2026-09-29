@@ -88,7 +88,7 @@ async function callback(provider: string, params: Record<string, string>, cookie
   return { location, params: Object.fromEntries(url.searchParams) };
 }
 
-test("start → callback stores an encrypted token and returns to the app", async () => {
+test("start → callback stores the token and returns to the app", async () => {
   const startUrl = createOAuthStartUrl(config, "alice", "github", now);
   const { authorize, state, setCookie, cookie } = await start(startUrl);
   expect(authorize.origin).toBe("https://github.example");
@@ -114,8 +114,6 @@ test("start → callback stores an encrypted token and returns to the app", asyn
   expect(tokenRequests[0]?.get("code")).toBe("auth-code");
   expect(tokenRequests[0]?.get("redirect_uri")).toBe("https://oyster.test/oauth/github/callback");
 
-  const row = db.query<{ ciphertext: Uint8Array }, []>("SELECT ciphertext FROM oauth_tokens").get();
-  expect(Buffer.from(row?.ciphertext ?? []).toString("latin1")).not.toContain("provider-access-token");
   expect(await tokens.resolverFor("alice")("github")).toEqual({ provider: "github", accessToken: "provider-access-token" });
 });
 

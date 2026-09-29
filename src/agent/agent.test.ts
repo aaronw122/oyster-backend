@@ -301,18 +301,9 @@ describe("prose", () => {
   });
 
   test("a model failure emits a plain error", async () => {
-    const result = await runAgentTurn({
-      userId: "alice",
-      sessionId: "s1",
-      system: CREATE_SYSTEM_PROMPT,
-      history: [],
-      userMessage: "hi",
-      services: env.services,
-      emit: env.emit,
-      model: scriptedModel(() => {
-        throw new Error("upstream 500 at https://openrouter.ai/api");
-      }),
-    });
+    const result = await turn(() => {
+      throw new Error("upstream 500 at https://openrouter.ai/api");
+    }, "hi");
     expect(result.endedBy).toBe("error");
     expect(env.events).toEqual([{ type: "error", text: expect.not.stringContaining("openrouter") }]);
     expect(result.messages).toEqual([{ role: "user", content: "hi" }]);

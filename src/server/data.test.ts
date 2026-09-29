@@ -1,22 +1,10 @@
 import { beforeEach, expect, test } from "bun:test";
-import type { Hono } from "hono";
-import {
-  ApiErrorSchema,
-  PearlDataSchema,
-  PreviewResponseSchema,
-  type SavePearlRequest,
-  SavePearlResponseSchema,
-} from "../contract/index.ts";
-import { loadConfig } from "../config.ts";
-import { openDb } from "../db/index.ts";
-import { nullAuthResolverFor } from "../runtime/index.ts";
+import { PearlDataSchema, PreviewResponseSchema, type SavePearlRequest, SavePearlResponseSchema } from "../contract/index.ts";
 import { createMemorySourceCache } from "../sources/index.ts";
-import { PearlStore } from "../store/pearls.ts";
-import { UserStore } from "../store/users.ts";
-import { type AppEnv, createApp } from "./app.ts";
+import { createTestServer, expectApiError as expectError, type TestServer } from "./testing.ts";
 
-let app: Hono<AppEnv>;
-let pearls: PearlStore;
+let pearls: TestServer["pearls"];
+let send: TestServer["send"];
 let alice: string;
 let bob: string;
 let now: number;
@@ -30,36 +18,14 @@ const body: SavePearlRequest = {
 };
 
 beforeEach(() => {
-  const db = openDb(":memory:");
-  pearls = new PearlStore(db);
-  const users = new UserStore(db);
-  alice = users.issueToken("alice");
-  bob = users.issueToken("bob");
   now = 0;
   payload = { value: "72°" };
-  const runtime = {
-    pearls,
-    authResolverFor: nullAuthResolverFor,
+  ({ pearls, send, alice, bob } = createTestServer({
     cache: createMemorySourceCache(() => now),
     fetch: (async () => Response.json(payload)) as unknown as typeof fetch,
     resolveHost: async () => ["203.0.113.10"],
-  };
-  app = createApp({ config: loadConfig({ NODE_ENV: "test" }), db, pearls, users, runtime });
+  }));
 });
-
-const send = (method: string, path: string, token: string, json?: unknown) =>
-  app.request(path, {
-    method,
-    headers: { Authorization: `Bearer ${token}`, ...(json !== undefined ? { "Content-Type": "application/json" } : {}) },
-    body: json === undefined ? undefined : JSON.stringify(json),
-  });
-
-async function expectError(res: Response, status: number, code: string) {
-  expect(res.status).toBe(status);
-  const parsed = ApiErrorSchema.parse(await res.json());
-  expect(parsed.error.code).toBe(code);
-  return parsed.error.message;
-}
 
 async function create(): Promise<string> {
   const res = await send("POST", "/pearls", alice, body);

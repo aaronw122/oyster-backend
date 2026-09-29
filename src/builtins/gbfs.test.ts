@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { fitAllSizes, runTransform } from "../sandbox/index.ts";
 import type { BuiltinContext } from "../sources/builtins.ts";
-import { createMemorySourceCache, fetchSources, SourceError } from "../sources/index.ts";
+import { createMemorySourceCache, fetchSources } from "../sources/index.ts";
 import { gbfsExample } from "./gbfs.example.ts";
 import { GBFS_SYSTEMS, type GbfsResult, gbfs } from "./gbfs.ts";
+import { builtinContext, json, recordingFetch, renderExample, sourceError } from "./testing.ts";
 import v2Discovery from "./__fixtures__/gbfs/v2/gbfs.json";
 import v2Info from "./__fixtures__/gbfs/v2/station_information.json";
 import v2Status from "./__fixtures__/gbfs/v2/station_status.json";
@@ -43,23 +43,15 @@ function withStatus(edit: (row: StatusRow) => StatusRow | null): Payloads {
   return { ...v2, "https://gbfs.lyft.com/gbfs/2.3/bkn/en/station_status.json": status };
 }
 
-function fakeFetch(payloads: Payloads) {
-  const calls: string[] = [];
-  const fn = (async (input: string | URL | Request) => {
-    const url = String(input);
-    calls.push(url);
-    return url in payloads ? Response.json(payloads[url]) : new Response("not found", { status: 404 });
-  }) as typeof fetch;
-  return { fn, calls };
-}
+/** Serves each recorded feed by URL; anything else is a 404. */
+const payloadFetch = (payloads: Payloads) =>
+  recordingFetch((url) => (url.href in payloads ? json(payloads[url.href]) : new Response("not found", { status: 404 })));
 
-function ctx(fetchFn: typeof fetch, cache?: BuiltinContext["cache"]): BuiltinContext {
-  return { fetch: fetchFn, auth: null, cache, env: {} };
-}
+const ctx = (fetchFn: typeof fetch, cache?: BuiltinContext["cache"]) => builtinContext(fetchFn, { cache });
 
 async function run(payloads: Payloads, params: Record<string, string> = {}): Promise<GbfsResult> {
   const parsed = gbfs.params.parse(params);
-  return (await gbfs.fetch(parsed, ctx(fakeFetch(payloads).fn))) as GbfsResult;
+  return (await gbfs.fetch(parsed, ctx(payloadFetch(payloads).fetch))) as GbfsResult;
 }
 
 describe("gbfs builtin: normalization", () => {
@@ -129,59 +121,45 @@ describe("gbfs builtin: normalization", () => {
   test("feeds are cached for their own ttl", async () => {
     let nowMs = 0;
     const cache = createMemorySourceCache(() => nowMs);
-    const { fn, calls } = fakeFetch(v2);
+    const { fetch, calls } = payloadFetch(v2);
     const params = gbfs.params.parse({});
-    await gbfs.fetch(params, ctx(fn, cache));
+    await gbfs.fetch(params, ctx(fetch, cache));
     expect(calls).toHaveLength(3); // discovery + information + status (2.x has num_ebikes_available)
     nowMs = (v2Status.ttl - 1) * 1000;
-    await gbfs.fetch(params, ctx(fn, cache));
+    await gbfs.fetch(params, ctx(fetch, cache));
     expect(calls).toHaveLength(3);
     nowMs = v2Status.ttl * 1000;
-    await gbfs.fetch(params, ctx(fn, cache));
+    await gbfs.fetch(params, ctx(fetch, cache));
     expect(calls).toHaveLength(6);
   });
 
   test("HTTP failures surface as http SourceErrors", async () => {
     const payloads = { ...v2 };
     delete payloads["https://gbfs.lyft.com/gbfs/2.3/bkn/en/station_status.json"];
-    const error = await run(payloads).catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(SourceError);
-    expect((error as SourceError).kind).toBe("http");
+    await sourceError(run(payloads), "http");
   });
 
   test("feed URLs on another origin are refused before any request", async () => {
     const directory = clone(v2Discovery);
     const status = directory.data.en.feeds.find((feed) => feed.name === "station_status")!;
     status.url = "http://169.254.169.254/latest/meta-data/station_status.json";
-    const { fn, calls } = fakeFetch({ ...v2, [GBFS_SYSTEMS.citibike.discoveryUrl]: directory });
-    const error = await gbfs.fetch(gbfs.params.parse({}), ctx(fn)).catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(SourceError);
-    expect((error as SourceError).kind).toBe("forbidden_url");
-    expect(calls).toEqual([GBFS_SYSTEMS.citibike.discoveryUrl]);
+    const { fetch, calls } = payloadFetch({ ...v2, [GBFS_SYSTEMS.citibike.discoveryUrl]: directory });
+    await sourceError(gbfs.fetch(gbfs.params.parse({}), ctx(fetch)), "forbidden_url");
+    expect(calls.map((call) => call.url.href)).toEqual([GBFS_SYSTEMS.citibike.discoveryUrl]);
   });
 
   test("unknown systems are rejected as invalid params", async () => {
     const result = await fetchSources(
       { inputs: {}, sources: [{ id: "bike", builtin: "gbfs", params: { system: "nowhere" }, method: "GET" }] },
-      { resolveAuth: async () => null, fetch: fakeFetch(v2).fn, builtins: [gbfs] },
+      { resolveAuth: async () => null, fetch: payloadFetch(v2).fetch, builtins: [gbfs] },
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.kind).toBe("invalid_params");
   });
 });
 
-async function runExample(payloads: Payloads, inputs: Record<string, unknown> = gbfsExample.inputs) {
-  const fetched = await fetchSources(
-    { ...gbfsExample, inputs },
-    { resolveAuth: async () => null, fetch: fakeFetch(payloads).fn, builtins: [gbfs] },
-  );
-  if (!fetched.ok) throw new Error(fetched.error.message);
-  const result = await runTransform(gbfsExample.transform, fetched.data, inputs);
-  if (!result.ok) throw new Error(result.error.message);
-  const fits = fitAllSizes(result.output);
-  for (const fit of Object.values(fits)) expect(fit).toMatchObject({ ok: true });
-  return result.output;
-}
+const runExample = (payloads: Payloads, inputs: Record<string, unknown> = gbfsExample.inputs) =>
+  renderExample(gbfsExample, { fetch: payloadFetch(payloads).fetch, builtins: [gbfs] }, inputs);
 
 describe("gbfs example Pearl", () => {
   test("picks the nearest station with enough docks and fits every size", async () => {

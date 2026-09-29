@@ -1,33 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { SIZES } from "../contract/index.ts";
-import { fitAllSizes, runTransform } from "../sandbox/index.ts";
-import type { BuiltinContext } from "../sources/builtins.ts";
+import { runTransform } from "../sandbox/index.ts";
 import { createMemorySourceCache, fetchSources, SourceError } from "../sources/index.ts";
 import nycFahrenheit from "./__fixtures__/weather/nyc-fahrenheit.json";
 import parisCelsius from "./__fixtures__/weather/paris-celsius.json";
+import { builtinContext, expectFitsAllSizes, json, offlineFetch, recordingFetch, renderExample } from "./testing.ts";
 import { describeWeatherCode, normalizeWeather, type WeatherData, weather } from "./weather.ts";
 import { weatherExample } from "./weather.example.ts";
 
 // Recorded 2026-09-29 from api.open-meteo.com with the exact query `weatherUrl` builds.
 const FIXTURES = { fahrenheit: nycFahrenheit, celsius: parisCelsius } as const;
 
-function fakeFetch(respond: (url: URL) => Response) {
-  const calls: URL[] = [];
-  const fn = (async (input: string | URL | Request) => {
-    const url = new URL(String(input));
-    calls.push(url);
-    return respond(url);
-  }) as typeof fetch;
-  return { fn, calls };
-}
-
 /** Serves the recorded fixture matching the requested temperature unit. */
 const fixtureFetch = () =>
-  fakeFetch((url) => Response.json(FIXTURES[url.searchParams.get("temperature_unit") as keyof typeof FIXTURES]));
+  recordingFetch((url) => json(FIXTURES[url.searchParams.get("temperature_unit") as keyof typeof FIXTURES]));
 
-function ctx(fetchFn: typeof fetch, cache = createMemorySourceCache()): BuiltinContext {
-  return { fetch: fetchFn, auth: null, cache, env: {} };
-}
+const ctx = (fetchFn: typeof fetch, cache = createMemorySourceCache()) => builtinContext(fetchFn, { cache });
 
 const params = (overrides: Record<string, string> = {}) => weather.params.parse({ lat: "40.7484", lon: "-73.9857", ...overrides });
 
@@ -163,13 +150,13 @@ describe("weather: params", () => {
 describe("weather: fetch", () => {
   test("requests explicit variables with units matching the chosen system", async () => {
     const imperial = fixtureFetch();
-    await weather.fetch(params(), ctx(imperial.fn));
+    await weather.fetch(params(), ctx(imperial.fetch));
     const metric = fixtureFetch();
-    await weather.fetch(params({ units: "celsius", timezone: "Europe/Paris" }), ctx(metric.fn));
+    await weather.fetch(params({ units: "celsius", timezone: "Europe/Paris" }), ctx(metric.fetch));
 
-    const [f] = imperial.calls;
-    expect(f!.origin + f!.pathname).toBe("https://api.open-meteo.com/v1/forecast");
-    expect(Object.fromEntries(f!.searchParams)).toMatchObject({
+    const f = imperial.calls[0]!.url;
+    expect(f.origin + f.pathname).toBe("https://api.open-meteo.com/v1/forecast");
+    expect(Object.fromEntries(f.searchParams)).toMatchObject({
       latitude: "40.7484",
       longitude: "-73.9857",
       temperature_unit: "fahrenheit",
@@ -178,9 +165,9 @@ describe("weather: fetch", () => {
       timezone: "auto",
       forecast_days: "7",
     });
-    expect(f!.searchParams.get("current")!.split(",")).toContain("apparent_temperature");
-    expect(f!.searchParams.get("daily")!.split(",")).toContain("temperature_2m_max");
-    expect(Object.fromEntries(metric.calls[0]!.searchParams)).toMatchObject({
+    expect(f.searchParams.get("current")!.split(",")).toContain("apparent_temperature");
+    expect(f.searchParams.get("daily")!.split(",")).toContain("temperature_2m_max");
+    expect(Object.fromEntries(metric.calls[0]!.url.searchParams)).toMatchObject({
       temperature_unit: "celsius",
       wind_speed_unit: "kmh",
       precipitation_unit: "mm",
@@ -190,8 +177,8 @@ describe("weather: fetch", () => {
 
   test("fetchSources caches results for 10 minutes per location and units", async () => {
     let now = 0;
-    const { fn, calls } = fixtureFetch();
-    const deps = { resolveAuth: async () => null, fetch: fn, builtins: [weather], env: {}, cache: createMemorySourceCache(() => now) };
+    const { fetch, calls } = fixtureFetch();
+    const deps = { resolveAuth: async () => null, fetch, builtins: [weather], env: {}, cache: createMemorySourceCache(() => now) };
     const pearl = (units: string) => ({
       inputs: {},
       sources: [{ id: "w", builtin: "weather", method: "GET" as const, params: { lat: "40.7484", lon: "-73.9857", units } }],
@@ -209,54 +196,40 @@ describe("weather: fetch", () => {
   });
 
   test("the builtin itself does not cache: fetchSources owns the result cache", async () => {
-    const { fn, calls } = fixtureFetch();
+    const { fetch, calls } = fixtureFetch();
     const cache = createMemorySourceCache(() => 0);
-    await weather.fetch(params(), ctx(fn, cache));
-    await weather.fetch(params(), ctx(fn, cache));
+    await weather.fetch(params(), ctx(fetch, cache));
+    await weather.fetch(params(), ctx(fetch, cache));
     expect(calls).toHaveLength(2);
   });
 
   test("provider errors surface as typed failures with the provider's reason", async () => {
-    const rejected = fakeFetch(() => Response.json({ error: true, reason: "Invalid timezone" }, { status: 400 }));
-    await expect(weather.fetch(params(), ctx(rejected.fn))).rejects.toMatchObject({
+    const rejected = recordingFetch(() => json({ error: true, reason: "Invalid timezone" }, 400));
+    await expect(weather.fetch(params(), ctx(rejected.fetch))).rejects.toMatchObject({
       kind: "http",
       message: "the weather service returned HTTP 400: Invalid timezone",
     });
-    const down = fakeFetch(() => new Response("upstream", { status: 503 }));
-    await expect(weather.fetch(params(), ctx(down.fn))).rejects.toMatchObject({ kind: "http" });
-    const garbage = fakeFetch(() => new Response("<html>", { status: 200 }));
-    await expect(weather.fetch(params(), ctx(garbage.fn))).rejects.toMatchObject({ kind: "parse" });
-    const offline = (async () => {
-      throw new TypeError("fetch failed");
-    }) as unknown as typeof fetch;
-    await expect(weather.fetch(params(), ctx(offline))).rejects.toMatchObject({ kind: "network" });
+    const down = recordingFetch(() => new Response("upstream", { status: 503 }));
+    await expect(weather.fetch(params(), ctx(down.fetch))).rejects.toMatchObject({ kind: "http" });
+    const garbage = recordingFetch(() => new Response("<html>", { status: 200 }));
+    await expect(weather.fetch(params(), ctx(garbage.fetch))).rejects.toMatchObject({ kind: "parse" });
+    await expect(weather.fetch(params(), ctx(offlineFetch))).rejects.toMatchObject({ kind: "network" });
   });
 });
 
 describe("weather: example Pearl", () => {
-  async function runExample(fetchFn: typeof fetch, inputs: Record<string, unknown> = weatherExample.inputs) {
-    const fetched = await fetchSources(
-      { sources: weatherExample.sources, inputs },
-      { resolveAuth: async () => null, fetch: fetchFn, env: {} },
-    );
-    if (!fetched.ok) throw new Error(fetched.error.message);
-    const result = await runTransform(weatherExample.transform, fetched.data, inputs);
-    if (!result.ok) throw new Error(result.error.message);
-    return result.output;
-  }
+  const runExample = (fetchFn: typeof fetch, inputs: Record<string, unknown> = weatherExample.inputs) =>
+    renderExample(weatherExample, { fetch: fetchFn }, inputs);
 
   test("renders the recorded NYC forecast and fits all four sizes", async () => {
-    const output = await runExample(fixtureFetch().fn);
+    const output = await runExample(fixtureFetch().fetch);
     expect(output.value).toBe("68° Cloudy");
     expect(output.subtitle).toBe("H 70° L 58°");
     expect(output.items![0]).toEqual({ label: "4 PM Partly cloudy", value: "69°" });
-    const fits = fitAllSizes(output);
-    for (const size of SIZES) expect(fits[size]).toMatchObject({ ok: true });
   });
 
   test("fits all sizes in celsius and in worst-case long conditions and extreme values", async () => {
-    const celsius = await runExample(fixtureFetch().fn, { ...weatherExample.inputs, units: "celsius" });
-    for (const size of SIZES) expect(fitAllSizes(celsius)[size]).toMatchObject({ ok: true });
+    await runExample(fixtureFetch().fetch, { ...weatherExample.inputs, units: "celsius" });
 
     const extreme = structuredClone(nycFahrenheit);
     extreme.current.weather_code = 86; // "Heavy snow showers"
@@ -266,9 +239,8 @@ describe("weather: example Pearl", () => {
     extreme.hourly.precipitation_probability = extreme.hourly.precipitation_probability.map(() => 100);
     extreme.daily.temperature_2m_max = extreme.daily.temperature_2m_max.map(() => 120.6);
     extreme.daily.temperature_2m_min = extreme.daily.temperature_2m_min.map(() => -100.2);
-    const output = await runExample(fakeFetch(() => Response.json(extreme)).fn);
+    const output = await runExample(recordingFetch(() => json(extreme)).fetch);
     expect(output.value).toBe("-40°");
-    for (const size of SIZES) expect(fitAllSizes(output)[size]).toMatchObject({ ok: true });
   });
 });
 
@@ -280,8 +252,8 @@ describe.skipIf(!process.env.LIVE)("weather: live Open-Meteo", () => {
     expect(typeof data.current.temperature).toBe("number");
     expect(data.hourly).toHaveLength(12);
     expect(data.daily).toHaveLength(7);
-    const output = (await runTransform(weatherExample.transform, { weather: data }, weatherExample.inputs));
-    expect(output.ok).toBe(true);
-    if (output.ok) for (const size of SIZES) expect(fitAllSizes(output.output)[size]).toMatchObject({ ok: true });
+    const output = await runTransform(weatherExample.transform, { weather: data }, weatherExample.inputs);
+    if (!output.ok) throw new Error(output.error.message);
+    expectFitsAllSizes(output.output);
   });
 });

@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { type ChatEvent, type Pearl, PearlDataSchema, PearlsListResponseSchema } from "../src/contract/index.ts";
-import { fitToSize } from "../src/sandbox/index.ts";
-import { LIVE, type LiveServer, SIZES, api, expectPlainLanguage, sendMessage, startServer, transcript } from "./harness.ts";
+import { type ChatEvent, type Pearl, PearlsListResponseSchema } from "../src/contract/index.ts";
+import { LIVE, type LiveServer, api, expectFreshAtEverySize, expectPlainLanguage, sendMessage, startServer, transcript } from "./harness.ts";
 
 // ENSURE-1: the Citi Bike flow end to end over HTTP with the real model, answering the
 // agent like a user would (plain facts, never code), until the Pearl is saved.
@@ -68,17 +67,7 @@ describe.skipIf(!LIVE || !process.env.OPENROUTER_API_KEY)("ENSURE-1: Citi Bike P
       expect(list.status).toBe(200);
       expect(PearlsListResponseSchema.parse(list.body).pearls.map((pearl) => pearl.id)).toContain(pearlId);
 
-      for (const size of SIZES) {
-        const response = await api(server, "GET", `/pearls/${pearlId}/data?size=${size}`);
-        expect(response.status).toBe(200);
-        const data = PearlDataSchema.parse(response.body);
-        expect(data.size).toBe(size);
-        expect(data.stale).toBe(false);
-        expect(data.output.value.trim()).not.toBe("");
-        const fit = fitToSize(data.output, size);
-        expect(fit.ok ? [] : fit.errors).toEqual([]);
-        console.log(`[e2e] citibike ${size}: ${JSON.stringify(data.output)}`);
-      }
+      await expectFreshAtEverySize(server, pearlId, "citibike");
 
       // §2a: creation resolves the office into a candidate station list; the office itself is discarded.
       const pearl = server.pearls.getById(pearlId);

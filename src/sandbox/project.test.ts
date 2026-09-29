@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { SIZES, SIZE_BUDGETS, WidgetOutputSchema, type Size, type WidgetOutput } from "../contract/index.ts";
+import { SIZES, WidgetOutputSchema, type Size, type WidgetOutput } from "../contract/index.ts";
 import { fitAllSizes, fitToSize, projectForSize } from "./index.ts";
 
 const FIXTURE_DIR = new URL("../../fixtures/contract/", import.meta.url);
@@ -15,17 +15,13 @@ const full: WidgetOutput = {
 };
 
 describe("projectForSize", () => {
-  test("inline keeps only value", () => {
-    expect(projectForSize(full, "inline")).toEqual({ value: "W 21 St" });
-  });
-
-  test("rectangular drops items but keeps subtitle", () => {
-    expect(projectForSize(full, "rectangular")).toEqual({ value: "W 21 St", subtitle: "5 docks" });
-  });
-
-  test("small and medium cut items to the first N", () => {
-    expect(projectForSize(full, "small").items).toEqual(full.items!.slice(0, 2));
-    expect(projectForSize(full, "medium").items).toEqual(full.items!.slice(0, 5));
+  test.each([
+    ["inline", { value: "W 21 St" }],
+    ["rectangular", { value: "W 21 St", subtitle: "5 docks" }],
+    ["small", { value: "W 21 St", subtitle: "5 docks", items: full.items!.slice(0, 2) }],
+    ["medium", { value: "W 21 St", subtitle: "5 docks", items: full.items!.slice(0, 5) }],
+  ] as const)("%s keeps only the fields and items it shows", (size, expected) => {
+    expect(projectForSize(full, size)).toEqual(expected);
   });
 
   test("does not mutate or alias the input", () => {
@@ -82,13 +78,10 @@ describe("fitToSize", () => {
 // ENSURE-3a: the canonical max-length fixtures fit exactly; one code point more does not.
 describe("max-length fixtures (ENSURE-3a)", () => {
   for (const size of SIZES) {
-    test(`${size} fixture fits exactly at its budget`, async () => {
+    // contract/fixtures.test.ts proves each fixture fills its budget exactly.
+    test(`${size} fixture fits`, async () => {
       const fixture = await maxFixture(size);
-      const budget = SIZE_BUDGETS[size];
       expect(fitToSize(fixture, size)).toEqual({ ok: true, output: fixture });
-      expect([...fixture.value]).toHaveLength(budget.value);
-      if (budget.subtitle !== null) expect([...fixture.subtitle!]).toHaveLength(budget.subtitle);
-      if (budget.items !== null) expect(fixture.items).toHaveLength(budget.items.max);
     });
 
     test(`${size} fixture with one extra code point in any shown field fails`, async () => {

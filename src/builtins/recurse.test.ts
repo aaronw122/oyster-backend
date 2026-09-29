@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
-import { SIZES } from "../contract/index.ts";
-import { fitAllSizes, runTransform } from "../sandbox/index.ts";
-import type { BuiltinContext } from "../sources/builtins.ts";
-import { fetchSources, SourceError } from "../sources/index.ts";
+import { fetchSources } from "../sources/index.ts";
 import hubVisits from "./__fixtures__/recurse/hub-visits.json";
 import { hubDate, recurse, type RecurseHubData } from "./recurse.ts";
 import { recurseExample } from "./recurse.example.ts";
+import { builtinContext, json, recordingFetch, renderExample, sourceError } from "./testing.ts";
 
 // Fixture provenance: shape recorded from the live `GET /api/v1/hub_visits`
 // on 2026-09-29 (55 visits, one page), trimmed to five rows and ANONYMIZED —
@@ -14,33 +12,7 @@ import { recurseExample } from "./recurse.example.ts";
 const TOKEN = "rc-secret-token";
 const ENV = { RC_PAT: TOKEN };
 
-type Call = { url: URL; headers: Headers };
-
-function fakeFetch(respond: (url: URL) => Response): { fetch: typeof fetch; calls: Call[] } {
-  const calls: Call[] = [];
-  const fn = (async (input: string | URL | Request, init?: RequestInit) => {
-    const url = new URL(input instanceof Request ? input.url : input);
-    calls.push({ url, headers: new Headers(init?.headers) });
-    return respond(url);
-  }) as typeof fetch;
-  return { fetch: fn, calls };
-}
-
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-
-function ctx(fetchFn: typeof fetch, env: Record<string, string | undefined> = ENV): BuiltinContext {
-  return { fetch: fetchFn, auth: null, cache: undefined, env };
-}
-
-async function sourceError(promise: Promise<unknown>): Promise<SourceError> {
-  const error = await promise.then(
-    () => undefined,
-    (e: unknown) => e,
-  );
-  expect(error).toBeInstanceOf(SourceError);
-  return error as SourceError;
-}
+const ctx = (fetchFn: typeof fetch, env: Record<string, string | undefined> = ENV) => builtinContext(fetchFn, { env });
 
 function visit(id: number, name: string, notes = "") {
   return { ...hubVisits[0]!, person: { id, name }, notes };
@@ -50,7 +22,7 @@ afterEach(() => setSystemTime());
 
 describe("recurse builtin", () => {
   test("normalizes the recorded visits: sorted by name, notes trimmed or null", async () => {
-    const { fetch, calls } = fakeFetch(() => json(hubVisits));
+    const { fetch, calls } = recordingFetch(() => json(hubVisits));
     const data = (await recurse.fetch({ date: "2026-09-29" }, ctx(fetch))) as RecurseHubData;
 
     expect(calls).toHaveLength(1);
@@ -76,7 +48,7 @@ describe("recurse builtin", () => {
   test("follows pages until one comes back short", async () => {
     const full = Array.from({ length: 200 }, (_, i) => visit(i + 1, `Person ${String(i + 1).padStart(3, "0")}`));
     const pages: Record<string, unknown[]> = { "1": full, "2": [visit(500, "Zed Last")] };
-    const { fetch, calls } = fakeFetch((url) => json(pages[url.searchParams.get("page")!] ?? []));
+    const { fetch, calls } = recordingFetch((url) => json(pages[url.searchParams.get("page")!] ?? []));
     const data = (await recurse.fetch({ date: "2026-09-29" }, ctx(fetch))) as RecurseHubData;
 
     expect(calls.map((c) => c.url.searchParams.get("page"))).toEqual(["1", "2"]);
@@ -86,7 +58,7 @@ describe("recurse builtin", () => {
 
   test("stops after a bounded number of pages even if the API never runs dry", async () => {
     const full = Array.from({ length: 200 }, (_, i) => visit(i + 1, `Person ${i + 1}`));
-    const { fetch, calls } = fakeFetch(() => json(full));
+    const { fetch, calls } = recordingFetch(() => json(full));
     const data = (await recurse.fetch({ date: "2026-09-29" }, ctx(fetch))) as RecurseHubData;
     expect(calls).toHaveLength(10);
     expect(data.count).toBe(200); // same people on every page are counted once
@@ -96,7 +68,7 @@ describe("recurse builtin", () => {
     // 2026-09-30 02:30 UTC is still 22:30 on the 29th in New York (EDT).
     setSystemTime(new Date("2026-09-30T02:30:00Z"));
     expect(hubDate(new Date())).toBe("2026-09-29");
-    const { fetch, calls } = fakeFetch(() => json([]));
+    const { fetch, calls } = recordingFetch(() => json([]));
     const data = (await recurse.fetch({}, ctx(fetch))) as RecurseHubData;
     expect(calls[0]!.url.searchParams.get("date")).toBe("2026-09-29");
     expect(data).toEqual({ date: "2026-09-29", count: 0, visitors: [] });
@@ -108,7 +80,7 @@ describe("recurse builtin", () => {
   });
 
   test("an impossible date is a plain params problem and makes no request", async () => {
-    const { fetch, calls } = fakeFetch(() => json([]));
+    const { fetch, calls } = recordingFetch(() => json([]));
     const error = await sourceError(recurse.fetch({ date: "2026-02-30" }, ctx(fetch)));
     expect(error.kind).toBe("invalid_params");
     expect(error.message).toBe('"2026-02-30" isn\'t a real date. Use one like 2026-09-29.');
@@ -116,7 +88,7 @@ describe("recurse builtin", () => {
   });
 
   test("without a server token the source fails plainly and makes no request", async () => {
-    const { fetch, calls } = fakeFetch(() => json(hubVisits));
+    const { fetch, calls } = recordingFetch(() => json(hubVisits));
     const result = await fetchSources(
       { inputs: {}, sources: [{ id: "hub", builtin: "recurse", method: "GET", params: {} }] },
       { resolveAuth: async () => null, fetch, builtins: [recurse], env: {} },
@@ -133,7 +105,7 @@ describe("recurse builtin", () => {
       [401, { message: "unauthorized" }],
       [404, { message: "not_found" }],
     ] as const) {
-      const { fetch } = fakeFetch(() => json(body, status));
+      const { fetch } = recordingFetch(() => json(body, status));
       const result = await fetchSources(
         { inputs: {}, sources: [{ id: "hub", builtin: "recurse", method: "GET", params: { date: "today" } }] },
         { resolveAuth: async () => null, fetch, builtins: [recurse], env: ENV },
@@ -147,29 +119,21 @@ describe("recurse builtin", () => {
   });
 
   test("outages and odd bodies surface as plain http/parse failures", async () => {
-    const down = fakeFetch(() => new Response("<html>oops</html>", { status: 502 }));
+    const down = recordingFetch(() => new Response("<html>oops</html>", { status: 502 }));
     const outage = await sourceError(recurse.fetch({}, ctx(down.fetch)));
     expect([outage.kind, outage.message]).toEqual(["http", "Recurse Center isn't responding right now (status 502)."]);
 
-    const odd = fakeFetch(() => json({ visits: [] }));
+    const odd = recordingFetch(() => json({ visits: [] }));
     const parse = await sourceError(recurse.fetch({}, ctx(odd.fetch)));
     expect([parse.kind, parse.message]).toEqual(["parse", "Recurse Center sent something unexpected."]);
   });
 });
 
 describe("recurse example Pearl", () => {
-  async function renderExample(fetchFn: typeof fetch) {
-    const fetched = await fetchSources(recurseExample, { resolveAuth: async () => null, fetch: fetchFn, builtins: [recurse], env: ENV });
-    if (!fetched.ok) throw new Error(fetched.error.message);
-    const run = await runTransform(recurseExample.transform, fetched.data, recurseExample.inputs);
-    if (!run.ok) throw new Error(run.error.message);
-    const fits = fitAllSizes(run.output);
-    for (const size of SIZES) expect(fits[size]).toMatchObject({ ok: true });
-    return run.output;
-  }
+  const renderHub = (fetchFn: typeof fetch) => renderExample(recurseExample, { fetch: fetchFn, builtins: [recurse], env: ENV });
 
   test("renders the recorded visits and fits all four sizes", async () => {
-    const output = await renderExample(fakeFetch(() => json(hubVisits)).fetch);
+    const output = await renderHub(recordingFetch(() => json(hubVisits)).fetch);
     expect(output.value).toBe("5 at the hub");
     expect(output.subtitle).toBe("Ada, Beatriz, Kenji +2");
     expect(output.items?.[0]).toEqual({ label: "Ada Okafor", value: "pairing" });
@@ -177,7 +141,7 @@ describe("recurse example Pearl", () => {
   });
 
   test("an empty hub still reads plainly and fits", async () => {
-    const output = await renderExample(fakeFetch(() => json([])).fetch);
+    const output = await renderHub(recordingFetch(() => json([])).fetch);
     expect(output).toEqual({ value: "0 at the hub", subtitle: "No one's checked in yet" });
   });
 
@@ -186,7 +150,7 @@ describe("recurse example Pearl", () => {
     const crowd = Array.from({ length: 120 }, (_, i) =>
       visit(i + 1, `${longName} ${i}`, "Working on a very long note about compilers and 🦀 all day long"),
     );
-    const output = await renderExample(fakeFetch(() => json(crowd)).fetch);
+    const output = await renderHub(recordingFetch(() => json(crowd)).fetch);
     expect(output.value).toBe("120 at hub");
     expect(output.subtitle).toBe("Maximiliana-Evange… +119");
     expect(output.items?.[0]?.value).toBe("Working o…");

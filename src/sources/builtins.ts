@@ -19,6 +19,8 @@ export type Builtin = {
   auth?: { provider: string };
   /** plaid → true */
   sensitive?: boolean;
+  /** How long fetchSources caches this builtin's result (e.g. GBFS `ttl`); default 30s. */
+  ttlMs?: number;
   /** Returns NORMALIZED plain JSON. */
   fetch(params: Record<string, string>, ctx: BuiltinContext): Promise<unknown>;
 };

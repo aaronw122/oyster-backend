@@ -86,7 +86,7 @@ async function fetchSource(
     const cached = deps.cache?.get(key);
     if (cached !== undefined) return { ok: true, value: cached };
     const value = await load();
-    deps.cache?.set(key, value, deps.defaultTtlMs ?? DEFAULT_TTL_MS);
+    deps.cache?.set(key, value, builtin?.ttlMs ?? deps.defaultTtlMs ?? DEFAULT_TTL_MS);
     return { ok: true, value };
   } catch (error) {
     const kind = error instanceof SourceError ? error.kind : "network";

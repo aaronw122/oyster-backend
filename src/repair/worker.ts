@@ -8,6 +8,8 @@ import { buildRepairMessage, REPAIR_SYSTEM_PROMPT } from "./prompt.ts";
 export type RepairOutcome =
   | { kind: "repaired"; pearl: Pearl }
   | { kind: "failed"; reason: string }
+  /** Not attempted: a source is failing, which a transform can't fix. No model call was made. */
+  | { kind: "skipped"; reason: string }
   /** The Pearl got a newer version (save, rollback) while this repair ran; nothing was changed. */
   | { kind: "superseded" };
 
@@ -25,19 +27,15 @@ const MAX_REASON_CHARS = 160;
  * agent can only change the transform, and its fix is accepted only after a live
  * run where all four sizes fit. Acceptance atomically ships a new version, seeds
  * last-good for every size, marks the Pearl "ok", and records a "repair" run.
- * Anything else records a failed "repair" run and leaves the Pearl's version and
- * last-good untouched. Fetch failures aren't sent to the model (a transform can't
- * fix a source that is down or gone).
+ * A turn without an accepted fix records a failed "repair" run and leaves the
+ * Pearl's version and last-good untouched. A failing source is "skipped" before
+ * any model call (a transform can't fix a source that is down or gone).
  */
 export function createRepairer(services: AgentServices, opts: { model?: LanguageModel; limits?: Partial<AgentLimits> } = {}): Repairer {
   const { pearls, runtime } = services;
-  const failed = (pearl: Pearl, reason: string): RepairOutcome => {
-    pearls.recordRun(pearl.id, { size: null, ok: false, error: reason, kind: "repair" });
-    return { kind: "failed", reason };
-  };
 
   return async (pearl, failure, { sensitive }) => {
-    if (failure.stage === "fetch") return failed(pearl, `not attempted, a source failed: ${failure.detail}`);
+    if (failure.stage === "fetch") return { kind: "skipped", reason: `a source failed: ${failure.detail}` };
     const probe = await fetchSources(pearl, {
       resolveAuth: runtime.authResolverFor(pearl.userId),
       fetch: runtime.fetch,
@@ -45,7 +43,7 @@ export function createRepairer(services: AgentServices, opts: { model?: Language
       resolveHost: runtime.resolveHost,
       builtins: runtime.builtins,
     });
-    if (!probe.ok) return failed(pearl, `not attempted, source "${probe.error.sourceId}" failed (${probe.error.kind})`);
+    if (!probe.ok) return { kind: "skipped", reason: `source "${probe.error.sourceId}" failed (${probe.error.kind})` };
 
     const submitted: { fix?: RepairFix } = {};
     const { endedBy } = await runAgentTurn({
@@ -68,7 +66,11 @@ export function createRepairer(services: AgentServices, opts: { model?: Language
       },
     });
     const { fix } = submitted;
-    if (!fix) return failed(pearl, `no passing fix (turn ended: ${endedBy})`);
+    if (!fix) {
+      const reason = `no passing fix (turn ended: ${endedBy})`;
+      pearls.recordRun(pearl.id, { size: null, ok: false, error: reason, kind: "repair" });
+      return { kind: "failed", reason };
+    }
 
     const repaired = pearls.transaction(() => {
       const current = pearls.getById(pearl.id);

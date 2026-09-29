@@ -198,16 +198,58 @@ describe("repair", () => {
     expect(env.pearls.getById(pearl.id)).toMatchObject({ version: 2, status: "ok" });
   });
 
-  test("a source that is down is not sent to the model", async () => {
+  test("a source that is down never reaches the model and costs no attempts", async () => {
     env.payload.current = { current: { temp: 72, cond: "Sunny" } };
     const pearl = await save(weather);
     const model = scriptedModel(submit(FIXED));
     const queue = wire(model);
+    const up = env.services.runtime.fetch;
     env.services.runtime.fetch = (async () => new Response("unavailable", { status: 503 })) as unknown as typeof fetch;
 
-    await refresh(queue, pearl);
+    for (let i = 0; i < 6; i++) {
+      await refresh(queue, pearl, ["small"]);
+      clock += 15 * MINUTE;
+    }
     expect(model.doStreamCalls).toHaveLength(0);
     expect(env.pearls.getById(pearl.id)).toMatchObject({ version: 1, status: "broken" });
-    expect(repairRuns(pearl.id)).toEqual([{ ok: 0, error: expect.stringContaining("not attempted") }]);
+    expect(repairRuns(pearl.id)).toEqual([]);
+
+    // The source comes back in a new shape: repair runs right away, with no backoff or used-up budget.
+    env.services.runtime.fetch = up;
+    env.payload.current = { now: { temp: 68, cond: "Cloudy" } };
+    await refresh(queue, pearl, ["small"]);
+    expect(attempts).toBe(1);
+    expect(env.pearls.getById(pearl.id)).toMatchObject({ version: 2, status: "ok" });
+  });
+
+  test("a source that keeps flipping shape gets at most four repairs a day, even when each succeeds", async () => {
+    const shapes = [{ now: { temp: 68, cond: "Cloudy" } }, { current: { temp: 72, cond: "Sunny" } }];
+    env.payload.current = shapes[1];
+    const pearl = await save(weather);
+    const model = scriptedModel((_index, options) => {
+      const transform = JSON.stringify(options.prompt).includes("now.temp: number") ? FIXED : weather.transform;
+      return { calls: [{ tool: "submit_repair", input: { transform, reason: "feed shape flipped" } }] };
+    });
+    const queue = wire(model);
+
+    for (let i = 0; i < 96; i++) {
+      env.payload.current = shapes[i % 2];
+      await refresh(queue, pearl, ["small"]);
+      clock += 15 * MINUTE;
+    }
+    expect(attempts).toBe(4);
+    expect(model.doStreamCalls).toHaveLength(4);
+    expect(env.pearls.getById(pearl.id)?.version).toBe(5);
+  });
+
+  test("a Pearl left 'repairing' by a restart recovers on a clean refresh", async () => {
+    env.payload.current = { current: { temp: 72, cond: "Sunny" } };
+    const pearl = await save(weather);
+    const queue = wire(scriptedModel(submit(FIXED)));
+    env.pearls.setStatus(pearl.id, "repairing");
+
+    await refresh(queue, pearl, ["small"]);
+    expect(env.pearls.getById(pearl.id)?.status).toBe("ok");
+    expect(attempts).toBe(0);
   });
 });

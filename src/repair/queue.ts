@@ -29,9 +29,11 @@ type Attempts = { startedAt: number[]; consecutiveFailures: number; nextAttemptA
  * hook. At most one repair per Pearl is in flight, so a widget burst (all four
  * sizes failing together) triggers one repair. Retries ride on later refresh
  * failures, so a Pearl nobody is looking at never spends model calls: each failed
- * attempt pushes the next one out (5m → 1h → 6h by default) and after
- * `maxAttemptsPerDay` the queue gives up for the day. Status: "repairing" while
- * an attempt runs, "ok" once a fix ships, "broken" while failing without one.
+ * attempt pushes the next one out (5m → 1h → 6h by default). Every attempt that
+ * reaches the model counts toward `maxAttemptsPerDay`, successful or not, so a
+ * source that keeps flipping shape can't buy unlimited repairs. Failing sources
+ * (fetch failures) never reach the model and cost nothing. Status: "repairing"
+ * while an attempt runs, "ok" once a fix ships, "broken" while failing without one.
  */
 export class RepairQueue {
   readonly #pearls: PearlStore;
@@ -56,6 +58,10 @@ export class RepairQueue {
   /** Handles one failed refresh of `pearl`'s current version. True when it started a repair. */
   enqueue(pearl: Pearl, failure: RunFailure, ctx: { sensitive: boolean }): boolean {
     if (this.#inFlight.has(pearl.id)) return false;
+    if (failure.stage === "fetch") {
+      if (pearl.status !== "broken") this.#pearls.setStatus(pearl.id, "broken");
+      return false;
+    }
     const now = this.#now();
     const attempts = this.#attempts.get(pearl.id) ?? { startedAt: [], consecutiveFailures: 0, nextAttemptAt: 0 };
     attempts.startedAt = attempts.startedAt.filter((startedAt) => now - startedAt < DAY);
@@ -71,7 +77,7 @@ export class RepairQueue {
     attempts.startedAt.push(now);
     this.#attempts.set(pearl.id, attempts);
     this.#pearls.setStatus(pearl.id, "repairing");
-    const job = this.#run(pearl, failure, ctx, attempts).finally(() => this.#inFlight.delete(pearl.id));
+    const job = this.#run(pearl, failure, ctx, attempts, now).finally(() => this.#inFlight.delete(pearl.id));
     this.#inFlight.set(pearl.id, job);
     return true;
   }
@@ -81,21 +87,28 @@ export class RepairQueue {
     while (this.#inFlight.size > 0) await Promise.all(this.#inFlight.values());
   }
 
-  async #run(pearl: Pearl, failure: RunFailure, ctx: { sensitive: boolean }, attempts: Attempts): Promise<void> {
+  async #run(pearl: Pearl, failure: RunFailure, ctx: { sensitive: boolean }, attempts: Attempts, startedAt: number): Promise<void> {
     try {
       const outcome = await this.#repair(pearl, failure, ctx).catch((error: unknown) => {
         console.error(`[repair] attempt crashed for Pearl ${pearl.id}`, error);
         this.#pearls.recordRun(pearl.id, { size: null, ok: false, error: "repair attempt crashed", kind: "repair" });
         return { kind: "failed" as const, reason: "crashed" };
       });
-      if (outcome.kind === "repaired") {
-        this.#attempts.delete(pearl.id);
+      if (outcome.kind === "skipped") {
+        // No model call was made: refund the attempt and leave the backoff alone.
+        const index = attempts.startedAt.lastIndexOf(startedAt);
+        if (index >= 0) attempts.startedAt.splice(index, 1);
+        this.#pearls.setStatus(pearl.id, "broken");
         return;
       }
-      if (outcome.kind === "superseded") {
-        // A newer definition replaced the broken one; it hasn't failed yet.
-        this.#attempts.delete(pearl.id);
-        if (this.#pearls.getById(pearl.id)?.status === "repairing") this.#pearls.setStatus(pearl.id, "ok");
+      if (outcome.kind === "repaired" || outcome.kind === "superseded") {
+        // The daily cap still counts this attempt; only the failure backoff resets.
+        attempts.consecutiveFailures = 0;
+        attempts.nextAttemptAt = 0;
+        // A superseding definition (save, rollback) hasn't failed yet.
+        if (outcome.kind === "superseded" && this.#pearls.getById(pearl.id)?.status === "repairing") {
+          this.#pearls.setStatus(pearl.id, "ok");
+        }
         return;
       }
       attempts.consecutiveFailures += 1;

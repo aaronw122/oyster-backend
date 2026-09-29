@@ -1,7 +1,7 @@
 import type { LanguageModel } from "ai";
 import { type AgentLimits, type AgentServices, type RepairFix, runAgentTurn } from "../agent/index.ts";
 import { isoNow, type Pearl, SIZES } from "../contract/index.ts";
-import type { RunFailure } from "../runtime/index.ts";
+import { isSensitive, type RunFailure } from "../runtime/index.ts";
 import { fetchSources } from "../sources/index.ts";
 import { buildRepairMessage, REPAIR_SYSTEM_PROMPT } from "./prompt.ts";
 
@@ -34,8 +34,10 @@ const MAX_REASON_CHARS = 160;
 export function createRepairer(services: AgentServices, opts: { model?: LanguageModel; limits?: Partial<AgentLimits> } = {}): Repairer {
   const { pearls, runtime } = services;
 
-  return async (pearl, failure, { sensitive }) => {
+  return async (pearl, failure, ctx) => {
     if (failure.stage === "fetch") return { kind: "skipped", reason: `a source failed: ${failure.detail}` };
+    // Never trust the hook's flag alone: runtime's rule decides, and either verdict redacts.
+    const sensitive = ctx.sensitive || isSensitive(pearl, runtime);
     const probe = await fetchSources(pearl, {
       resolveAuth: runtime.authResolverFor(pearl.userId),
       fetch: runtime.fetch,

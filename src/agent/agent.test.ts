@@ -126,6 +126,47 @@ describe("preview and save", () => {
     expect(JSON.stringify(toolResultsSeen(model, "test_pearl"))).toContain("value: string");
   });
 
+  test("a URL source signed in with a sensitive provider is redacted like a sensitive builtin; plain URLs are not", async () => {
+    env.services.oauth?.tokens.save("alice", "bank", { accessToken: "tok-secret-123" });
+    env.payload.current = { balance: 4821.37, owner: "Jane Quinn" };
+    const transform = `(s) => ({ value: String(s.b.balance), subtitle: s.b.owner })`;
+    const signedIn: DraftPearl = {
+      sources: [{ id: "b", url: "https://api.bank.test/balance", method: "GET", auth: { provider: "bank" } }],
+      inputs: {},
+      transform,
+    };
+    const { model } = await turn([
+      { calls: [{ tool: "test_pearl", input: signedIn }] },
+      { calls: [{ tool: "preview_pearl", input: signedIn }] },
+      { text: "Done." },
+    ]);
+    const seen = modelVisible(model);
+    for (const secret of ["4821", "Jane", "Quinn", "tok-secret-123"]) expect(seen).not.toContain(secret);
+    expect(JSON.stringify(toolResultsSeen(model, "test_pearl"))).toContain("value: string");
+    expect(JSON.stringify(toolResultsSeen(model, "preview_pearl"))).toContain("value: string");
+
+    const plain: DraftPearl = { ...signedIn, sources: [{ id: "b", url: "https://api.public.test/balance", method: "GET" }] };
+    const open = await turn([
+      { calls: [{ tool: "test_pearl", input: plain }] },
+      { calls: [{ tool: "preview_pearl", input: plain }] },
+      { text: "Done." },
+    ]);
+    expect(JSON.stringify(toolResultsSeen(open.model, "test_pearl"))).toContain("Jane Quinn");
+    expect(JSON.stringify(toolResultsSeen(open.model, "preview_pearl"))).toContain("Jane Quinn");
+  });
+
+  test("test_pearl reports which sizes overflow along with the raw output", async () => {
+    env.payload.current = { temp: 72 };
+    const { model } = await turn([
+      { calls: [{ tool: "test_pearl", input: { ...weatherDraft, transform: `(s) => ({ value: "x".repeat(200) + s.w.temp })` } }] },
+      { text: "Done." },
+    ]);
+    const seen = JSON.stringify(toolResultsSeen(model, "test_pearl"));
+    expect(seen).toContain('"fitsAllSizes":false');
+    expect(seen).toMatch(/"tooLongFor":\[[^\]]*"inline"/);
+    expect(seen).toContain('72"');
+  });
+
   test("save_pearl persists via savePearl and emits saved", async () => {
     const { endedBy } = await turn([
       { calls: [{ tool: "preview_pearl", input: weatherDraft }] },

@@ -2,9 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { type LanguageModel, type ModelMessage, type ToolSet, tool } from "ai";
 import { z } from "zod";
 import type { Config } from "../config.ts";
-import { type ChatEvent, PearlSourceSchema, SIZES, type Size, type WidgetOutput } from "../contract/index.ts";
+import { type ChatEvent, PearlSourceSchema, type Size, type WidgetOutput } from "../contract/index.ts";
 import { createOAuthStartUrl, type OAuthDeps } from "../oauth/index.ts";
-import { type DraftPearl, execute, isSensitive, type RunFailure, runDraft, type RuntimeDeps, savePearl } from "../runtime/index.ts";
+import { type DraftPearl, isSensitiveProvider, type RunFailure, runDraft, type RuntimeDeps, savePearl } from "../runtime/index.ts";
 import { type Builtin, listBuiltins } from "../sources/builtins.ts";
 import { guardedGet, type HostResolver, SourceError, summarizeJson } from "../sources/index.ts";
 import type { PearlStore } from "../store/pearls.ts";
@@ -134,15 +134,10 @@ export function createTools(ctx: ToolContext): ToolSet {
   const doFetch = services.fetch ?? runtime.fetch;
   const search = services.search ?? createWebSearch({ braveApiKey: services.config.braveApiKey, fetch: doFetch });
 
-  /** True for providers whose data is sensitive: any builtin using that provider is marked sensitive. */
-  const providerSensitive = (provider: string | undefined) =>
-    provider !== undefined && builtins().some((builtin) => builtin.auth?.provider === provider && builtin.sensitive === true);
   const repair = ctx.repair;
   if (ctx.mode === "repair" && !repair) throw new Error("createTools: repair mode needs the Pearl being repaired");
-  const draftSensitive = (draft: DraftPearl) =>
-    repair?.sensitive === true ||
-    isSensitive(draft, runtime) ||
-    draft.sources.some((source) => providerSensitive(source.auth?.provider));
+  /** Runtime's verdict for this run, plus the repaired Pearl's own verdict in repair mode. */
+  const runSensitive = (run: { sensitive: boolean }) => run.sensitive || repair?.sensitive === true;
   const limitReached = ctx.mode === "repair" ? REPAIR_LIMIT_REACHED : LIMIT_REACHED;
 
   /** Counts the call against the tool budget, emits its status, and turns thrown errors into results. */
@@ -178,33 +173,32 @@ export function createTools(ctx: ToolContext): ToolSet {
     ...(failure.sizes ? { sizes: failure.sizes } : {}),
   });
 
-  /** Live run of a draft; the model sees raw output (shape only when sensitive) and every size problem. */
+  const outputView = (output: WidgetOutput, sensitive: boolean) =>
+    sensitive ? { sensitive: true, outputShape: summarizeJson(output, { redact: true }) } : { output };
+
+  /** Live run of a draft; the model sees raw output (shape only when sensitive) and which sizes overflow. */
   const testDraft = async (draft: DraftPearl) => {
-    const sensitive = draftSensitive(draft);
-    const run = await execute(userId, draft, runtime);
-    if (!run.ok) return failureResult(run.failure, sensitive);
-    const sizeProblems = SIZES.flatMap((size) => {
-      const fit = run.fits[size];
-      return fit.ok ? [] : fit.errors;
-    });
+    const run = await runDraft(userId, draft, runtime);
+    const sensitive = runSensitive(run);
+    if (run.ok) return { ok: true, fitsAllSizes: true, ...outputView(run.output, sensitive) };
+    if (!run.output) return failureResult(run.failure, sensitive);
     return {
       ok: true,
-      fitsAllSizes: sizeProblems.length === 0,
-      sizeProblems,
-      ...(sensitive ? { sensitive: true, outputShape: summarizeJson(run.output, { redact: true }) } : { output: run.output }),
+      fitsAllSizes: false,
+      tooLongFor: run.failure.sizes ?? [],
+      sizeProblems: run.failure.detail,
+      ...outputView(run.output, sensitive),
     };
   };
 
   /** Runs the draft and, on success, sends the real previews to the app (never to the model when sensitive). */
   const showPreview = async (draft: DraftPearl) => {
-    const sensitive = draftSensitive(draft);
     const run = await runDraft(userId, draft, runtime);
-    if (!run.ok) return failureResult(run.failure, sensitive || run.sensitive);
+    const sensitive = runSensitive(run);
+    if (!run.ok) return failureResult(run.failure, sensitive);
     emit({ type: "preview", previews: run.previews });
     state.previewed.add(draftHash(draft));
-    if (sensitive || run.sensitive) {
-      return { ok: true, shownToUser: true, sensitive: true, outputShape: summarizeJson(run.output, { redact: true }) };
-    }
+    if (sensitive) return { ok: true, shownToUser: true, ...outputView(run.output, true) };
     return { ok: true, shownToUser: true, previews: run.previews };
   };
 
@@ -287,7 +281,7 @@ export function createTools(ctx: ToolContext): ToolSet {
           if (provider !== undefined && !credential) {
             return { ok: false, error: `The user hasn't connected ${provider}. Call start_oauth first.` };
           }
-          const redact = sensitive === true || providerSensitive(provider);
+          const redact = sensitive === true || isSensitiveProvider(provider, runtime);
           const scrub = (text: string) => (credential ? text.split(credential.accessToken).join("[redacted]") : text);
           let body: { text: string; contentType: string };
           try {
@@ -354,7 +348,7 @@ export function createTools(ctx: ToolContext): ToolSet {
         execute: guarded(null, async ({ transform, reason }: { transform: string; reason: string }) => {
           const draft = { sources, inputs, transform };
           const run = await runDraft(userId, draft, runtime);
-          if (!run.ok) return failureResult(run.failure, draftSensitive(draft) || run.sensitive);
+          if (!run.ok) return failureResult(run.failure, runSensitive(run));
           repair.submit({ transform, reason, previews: run.previews });
           state.ended = "repaired";
           return { ok: true, accepted: true };
@@ -436,7 +430,7 @@ export function createTools(ctx: ToolContext): ToolSet {
           const result = await savePearl(userId, { name, ...draft }, runtime, pearlId);
           if (!result.ok) {
             if ("notFound" in result) return { ok: false, error: "No saved Pearl with that id belongs to this user." };
-            return failureResult(result.failure, draftSensitive(draft));
+            return failureResult(result.failure, result.sensitive);
           }
           emit({ type: "saved", pearl: { id: result.pearl.id, name: result.pearl.name } });
           state.ended = "saved";

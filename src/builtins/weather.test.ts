@@ -188,19 +188,32 @@ describe("weather: fetch", () => {
     });
   });
 
-  test("responses are cached for 10 minutes per location and units", async () => {
+  test("fetchSources caches results for 10 minutes per location and units", async () => {
     let now = 0;
-    const cache = createMemorySourceCache(() => now);
     const { fn, calls } = fixtureFetch();
-    const first = await weather.fetch(params(), ctx(fn, cache));
-    now = 9 * 60_000;
-    expect(await weather.fetch(params(), ctx(fn, cache))).toEqual(first);
+    const deps = { resolveAuth: async () => null, fetch: fn, builtins: [weather], env: {}, cache: createMemorySourceCache(() => now) };
+    const pearl = (units: string) => ({
+      inputs: {},
+      sources: [{ id: "w", builtin: "weather", method: "GET" as const, params: { lat: "40.7484", lon: "-73.9857", units } }],
+    });
+    const first = await fetchSources(pearl("fahrenheit"), deps);
+    expect(first.ok).toBe(true);
+    now = 10 * 60_000 - 1;
+    expect(await fetchSources(pearl("fahrenheit"), deps)).toEqual(first);
     expect(calls).toHaveLength(1);
-    await weather.fetch(params({ units: "celsius" }), ctx(fn, cache));
+    await fetchSources(pearl("celsius"), deps);
     expect(calls).toHaveLength(2);
-    now = 10 * 60_000 + 1;
-    await weather.fetch(params(), ctx(fn, cache));
+    now = 10 * 60_000;
+    await fetchSources(pearl("fahrenheit"), deps);
     expect(calls).toHaveLength(3);
+  });
+
+  test("the builtin itself does not cache: fetchSources owns the result cache", async () => {
+    const { fn, calls } = fixtureFetch();
+    const cache = createMemorySourceCache(() => 0);
+    await weather.fetch(params(), ctx(fn, cache));
+    await weather.fetch(params(), ctx(fn, cache));
+    expect(calls).toHaveLength(2);
   });
 
   test("provider errors surface as typed failures with the provider's reason", async () => {

@@ -259,9 +259,6 @@ async function fetchWeather(rawParams: Record<string, string>, ctx: BuiltinConte
   }
   const params = parsedParams.data;
   const url = weatherUrl(params);
-  const cacheKey = `weather:${url}`;
-  const cached = ctx.cache?.get(cacheKey);
-  if (cached !== undefined) return cached as WeatherData;
 
   let response: Response;
   try {
@@ -288,9 +285,7 @@ async function fetchWeather(rawParams: Record<string, string>, ctx: BuiltinConte
   } catch {
     throw new SourceError("parse", "the weather service did not return valid JSON");
   }
-  const normalized = normalizeWeather(raw, params.units);
-  ctx.cache?.set(cacheKey, normalized, CACHE_TTL_MS);
-  return normalized;
+  return normalizeWeather(raw, params.units);
 }
 
 export const weather: Builtin = {
@@ -308,5 +303,6 @@ export const weather: Builtin = {
     "condition is short plain text like Sunny, Partly cloudy, Light rain; humidity and precipitationProbability are percents.",
   ].join(" "),
   params: WeatherParams,
+  ttlMs: CACHE_TTL_MS,
   fetch: fetchWeather,
 };

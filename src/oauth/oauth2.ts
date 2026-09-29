@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { isoNow } from "../contract/index.ts";
 import { OAuthError, type OAuthProviderAdapter, type StoredToken } from "./types.ts";
 
 export type OAuth2Config = {
@@ -116,7 +117,7 @@ function parseTokenResponse(json: unknown, nowMs: number, failure: OAuthError): 
   if (typeof record.refresh_token === "string" && record.refresh_token !== "") token.refreshToken = record.refresh_token;
   const expiresIn = typeof record.expires_in === "string" ? Number(record.expires_in) : record.expires_in;
   if (typeof expiresIn === "number" && Number.isFinite(expiresIn) && expiresIn > 0) {
-    token.expiresAt = new Date(nowMs + expiresIn * 1000).toISOString();
+    token.expiresAt = isoNow(new Date(nowMs + expiresIn * 1000));
   }
   return token;
 }

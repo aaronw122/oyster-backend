@@ -19,7 +19,13 @@ export type Builtin = {
   auth?: { provider: string };
   /** plaid → true */
   sensitive?: boolean;
-  /** How long fetchSources caches this builtin's result (e.g. GBFS `ttl`); default 30s. */
+  /**
+   * How long fetchSources caches this builtin's NORMALIZED result per params
+   * (default 30s); it is the only cache for results. A builtin may also keep a
+   * raw upstream cache in `ctx.cache` when one upstream payload serves many
+   * params (GBFS feeds across stations, MTA feeds across stops); set `ttlMs`
+   * explicitly then, no longer than the raw cache's (expected) lifetime.
+   */
   ttlMs?: number;
   /** Returns NORMALIZED plain JSON. */
   fetch(params: Record<string, string>, ctx: BuiltinContext): Promise<unknown>;

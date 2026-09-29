@@ -64,4 +64,29 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX runs_pearl_id ON runs(pearl_id, id);
     `,
   },
+  {
+    name: "oauth_tokens",
+    sql: `
+      CREATE TABLE oauth_tokens (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        ciphertext BLOB NOT NULL,
+        iv BLOB NOT NULL,
+        tag BLOB NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, provider)
+      );
+
+      CREATE TABLE oauth_state_nonces (
+        nonce TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        code_verifier TEXT,
+        browser_binding_hash TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        used INTEGER NOT NULL DEFAULT 0 CHECK (used IN (0, 1))
+      );
+      CREATE INDEX oauth_state_nonces_expires_at ON oauth_state_nonces(expires_at);
+    `,
+  },
 ];

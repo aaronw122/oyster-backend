@@ -6,9 +6,9 @@ import { SourceError } from "../sources/types.ts";
 // Crypto: CoinGecko `/coins/markets` (keyless, or a free Demo key from
 // COINGECKO_API_KEY for a stable 100 calls/min). Stocks: Twelve Data `/quote`
 // with a server-held free key from TWELVE_DATA_API_KEY (8 credits/min, 800/day;
-// one credit per symbol). Results are cached for 60s to stay inside both limits.
+// one credit per symbol). fetchSources caches results for 60s (`ttlMs`) to stay
+// inside both limits.
 
-const CACHE_TTL_MS = 60_000;
 const TIMEOUT_MS = 8_000;
 /** A live quote whose last update is older than this is flagged `isStale`. */
 const STALE_AFTER_MS = 15 * 60_000;
@@ -58,7 +58,7 @@ export const CRYPTO_TICKERS: Readonly<Record<string, string>> = {
   AAVE: "aave",
 };
 
-export type MarketState = "open" | "closed" | "pre" | "post";
+export type MarketState = "open" | "closed";
 
 export type MarketQuote = {
   symbol: string;
@@ -102,19 +102,13 @@ export const markets: Builtin = {
     "around the clock; stock quotes are the last trade, so check marketState before calling them live.",
   ].join(" "),
   params: paramsSchema,
+  ttlMs: 60_000,
   async fetch(rawParams, ctx) {
     const params = paramsSchema.parse(rawParams);
     const symbols = splitSymbols(params.symbols);
-    const cacheKey = `markets:${params.kind}:${params.currency}:${symbols.join(",")}`;
-    const cached = ctx.cache?.get(cacheKey);
-    if (cached !== undefined) return cached;
-
-    const data =
-      params.kind === "crypto"
-        ? await fetchCrypto(symbols, params.currency, ctx)
-        : await fetchStocks(symbols, params.currency, ctx);
-    ctx.cache?.set(cacheKey, data, CACHE_TTL_MS);
-    return data;
+    return params.kind === "crypto"
+      ? fetchCrypto(symbols, params.currency, ctx)
+      : fetchStocks(symbols, params.currency, ctx);
   },
 };
 
@@ -220,7 +214,8 @@ type TwelveDataQuote = {
 
 async function fetchStocks(symbols: string[], currency: string, ctx: BuiltinContext): Promise<MarketsData> {
   const apiKey = ctx.env.TWELVE_DATA_API_KEY;
-  if (!apiKey) throw new SourceError("auth_missing", "Stock quotes aren't set up on this server yet.");
+  // A server setting, not a user connection: never `auth_missing` (that asks the user to connect).
+  if (!apiKey) throw new SourceError("invalid_params", "Stock quotes aren't set up on this server yet.");
   if (symbols.length > MAX_STOCK_SYMBOLS) {
     throw new SourceError("invalid_params", `Pick at most ${MAX_STOCK_SYMBOLS} stocks.`);
   }

@@ -9,9 +9,15 @@ import twelveDataAapl from "./__fixtures__/markets/twelvedata-quote-aapl.json";
 import { coinGeckoId, markets, type MarketsData } from "./markets.ts";
 import { marketsExample } from "./markets.example.ts";
 
-// Recorded fixtures: CoinGecko `/coins/markets?ids=bitcoin,ethereum,solana`
-// and Twelve Data `/quote?symbol=AAPL` (live, US market open) plus its
-// bad-key error. Clock is pinned just after the recordings.
+// Fixture provenance (all recorded 2026-09-29):
+// - twelvedata-quote-aapl.json / twelvedata-error-401.json: raw Twelve Data
+//   `/quote?symbol=AAPL` responses (US market open; and a bad key).
+// - coingecko-markets.json: real BTC/ETH/SOL data, but NOT a raw `/coins/markets`
+//   capture — that endpoint was CloudFront-blocked for this IP, so each row was
+//   reshaped one-to-one from the live `/coins/{id}` `market_data.*.usd` fields.
+// - The MSFT batch entry below is synthesized from the AAPL record (the demo key
+//   serves AAPL only); the per-symbol error follows Twelve Data's documented shape.
+// The clock is pinned just after the recordings.
 const COINGECKO_RECORDED_AT = Math.max(...coingeckoMarkets.map((row) => Date.parse(row.last_updated)));
 const AAPL_RECORDED_AT = twelveDataAapl.last_quote_at * 1000;
 const STOCK_KEY = "td-secret-key";
@@ -31,8 +37,8 @@ function fakeFetch(respond: (url: URL) => Response): { fetch: typeof fetch; call
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-function ctx(fetchFn: typeof fetch, env: Record<string, string | undefined> = {}, now = Date.now): BuiltinContext {
-  return { fetch: fetchFn, auth: null, cache: createMemorySourceCache(now), env };
+function ctx(fetchFn: typeof fetch, env: Record<string, string | undefined> = {}): BuiltinContext {
+  return { fetch: fetchFn, auth: null, cache: undefined, env };
 }
 
 async function expectSourceError(promise: Promise<unknown>, kind: SourceError["kind"]): Promise<string> {
@@ -130,26 +136,35 @@ describe("markets builtin — crypto (CoinGecko)", () => {
     expect(message).toBe("The crypto price service isn't responding right now (status 403).");
   });
 
-  test("caches a result for 60 seconds to respect provider rate limits", async () => {
+  test("fetchSources caches a result for 60 seconds to respect provider rate limits", async () => {
     let now = COINGECKO_RECORDED_AT;
     const { fetch, calls } = fakeFetch(() => json(coingeckoMarkets));
-    const context = ctx(fetch, {}, () => now);
-    const params = { kind: "crypto", symbols: "BTC,ETH", currency: "usd" };
-    const first = await markets.fetch(params, context);
+    const pearl = {
+      inputs: {},
+      sources: [{ id: "p", builtin: "markets", method: "GET" as const, params: { kind: "crypto", symbols: "BTC,ETH" } }],
+    };
+    const deps = { resolveAuth: async () => null, fetch, builtins: [markets], env: {}, cache: createMemorySourceCache(() => now) };
+    const first = await fetchSources(pearl, deps);
     now += 59_999;
-    expect(await markets.fetch(params, context)).toBe(first);
+    expect(await fetchSources(pearl, deps)).toEqual(first);
     expect(calls).toHaveLength(1);
     now += 1;
-    await markets.fetch(params, context);
+    await fetchSources(pearl, deps);
     expect(calls).toHaveLength(2);
   });
 });
 
 describe("markets builtin — stocks (Twelve Data)", () => {
-  test("without a server key the source reports a plain auth_missing error and makes no request", async () => {
+  test("without a server key the source fails as a params problem (not a user connection) and makes no request", async () => {
     const { fetch, calls } = fakeFetch(() => json(twelveDataAapl));
-    const message = await expectSourceError(markets.fetch({ kind: "stock", symbols: "AAPL" }, ctx(fetch)), "auth_missing");
-    expect(message).toBe("Stock quotes aren't set up on this server yet.");
+    const result = await fetchSources(
+      { inputs: {}, sources: [{ id: "s", builtin: "markets", method: "GET", params: { kind: "stock", symbols: "AAPL" } }] },
+      { resolveAuth: async () => null, fetch, builtins: [markets], env: {} },
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: { sourceId: "s", kind: "invalid_params", message: "Stock quotes aren't set up on this server yet." },
+    });
     expect(calls).toHaveLength(0);
   });
 

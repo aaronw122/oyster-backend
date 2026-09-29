@@ -42,7 +42,7 @@ describe.skipIf(!LIVE || !process.env.OPENROUTER_API_KEY)("declines (live)", () 
       const { events, unavailable } = await expectDecline(
         "Show my Acme Corp internal dashboard metrics. The dashboard's API needs my personal API key.",
       );
-      expect(unavailable).toMatch(/not (?:supported|available)|(?:can't|cannot|can not|don't|do not|isn't|is not)\b.*\b(?:yet|support|connect|work)/i);
+      expect(unavailable).toMatch(/not (?:supported|available)|(?:can[’']t|cannot|can not|don[’']t|do not|isn[’']t|is not)\b.*\b(?:yet|support|connect|work)/i);
       // Asking for the key would mean collecting a secret the product can't store yet.
       const asks = events.flatMap((event) => (event.type === "question" ? [event.text, ...(event.options ?? [])] : []));
       expect(asks).toEqual([]);

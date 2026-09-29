@@ -35,62 +35,75 @@ export type LiveServer = {
 export async function startServer(userId = "e2e-user"): Promise<LiveServer> {
   const dir = mkdtempSync(join(tmpdir(), "oyster-e2e-"));
   const dbPath = join(dir, "oyster.db");
-  const child = Bun.spawn(["bun", "run", "src/index.ts"], {
-    cwd: REPO_ROOT,
-    env: {
-      ...process.env,
-      NODE_ENV: "production",
-      PORT: "0",
-      DB_PATH: dbPath,
-      OAUTH_STATE_SECRET: randomBytes(32).toString("hex"),
-      TOKEN_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
-    },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  let output = "";
-  let onOutput = () => {};
-  const drain = async (stream: ReadableStream<Uint8Array>) => {
-    const decoder = new TextDecoder();
-    for await (const chunk of stream) {
-      output += decoder.decode(chunk, { stream: true });
-      onOutput();
-    }
-  };
-  void drain(child.stdout);
-  void drain(child.stderr);
-
-  const baseUrl = await new Promise<string>((resolveUrl, reject) => {
-    const timer = setTimeout(() => reject(new Error(`server did not start within ${BOOT_TIMEOUT_MS}ms:\n${output}`)), BOOT_TIMEOUT_MS);
-    onOutput = () => {
-      const match = /oyster listening on (\S+)/.exec(output);
-      if (!match?.[1]) return;
-      clearTimeout(timer);
-      resolveUrl(match[1].replace(/\/+$/, ""));
-    };
-    void child.exited.then((code) => {
-      clearTimeout(timer);
-      reject(new Error(`server exited with code ${code} before listening:\n${output}`));
+  let child: Bun.Subprocess<"ignore", "pipe", "pipe"> | undefined;
+  let db: Database | undefined;
+  try {
+    child = Bun.spawn(["bun", "run", "src/index.ts"], {
+      cwd: REPO_ROOT,
+      env: {
+        ...process.env,
+        NODE_ENV: "production",
+        PORT: "0",
+        DB_PATH: dbPath,
+        OAUTH_STATE_SECRET: randomBytes(32).toString("hex"),
+        TOKEN_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
+      },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
     });
-  });
+    const server = child;
 
-  // The server has applied migrations; this second connection only reads/writes rows.
-  const db = openDb(dbPath);
-  const token = new UserStore(db).issueToken(userId);
-  return {
-    baseUrl,
-    token,
-    db,
-    pearls: new PearlStore(db),
-    logs: () => output,
-    stop: async () => {
-      child.kill();
-      await child.exited;
-      db.close();
-      rmSync(dir, { recursive: true, force: true });
-    },
-  };
+    let output = "";
+    let onOutput = () => {};
+    const drain = async (stream: ReadableStream<Uint8Array>) => {
+      const decoder = new TextDecoder();
+      for await (const chunk of stream) {
+        output += decoder.decode(chunk, { stream: true });
+        onOutput();
+      }
+    };
+    void drain(server.stdout);
+    void drain(server.stderr);
+
+    const baseUrl = await new Promise<string>((resolveUrl, reject) => {
+      const timer = setTimeout(() => reject(new Error(`server did not start within ${BOOT_TIMEOUT_MS}ms:\n${output}`)), BOOT_TIMEOUT_MS);
+      onOutput = () => {
+        const match = /oyster listening on (\S+)/.exec(output);
+        if (!match?.[1]) return;
+        clearTimeout(timer);
+        resolveUrl(match[1].replace(/\/+$/, ""));
+      };
+      void server.exited.then((code) => {
+        clearTimeout(timer);
+        reject(new Error(`server exited with code ${code} before listening:\n${output}`));
+      });
+    });
+
+    // The server has applied migrations; this second connection only reads/writes rows.
+    const store = openDb(dbPath);
+    db = store;
+    const token = new UserStore(store).issueToken(userId);
+    return {
+      baseUrl,
+      token,
+      db: store,
+      pearls: new PearlStore(store),
+      logs: () => output,
+      stop: async () => {
+        server.kill();
+        await server.exited;
+        store.close();
+        rmSync(dir, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    child?.kill();
+    await child?.exited;
+    db?.close();
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 /** Authenticated JSON request; returns the status and parsed body. */

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { type ChatEvent, PearlDataSchema, PearlsListResponseSchema } from "../src/contract/index.ts";
+import { type ChatEvent, type Pearl, PearlDataSchema, PearlsListResponseSchema } from "../src/contract/index.ts";
+import { fitToSize } from "../src/sandbox/index.ts";
 import { LIVE, type LiveServer, SIZES, api, expectPlainLanguage, sendMessage, startServer, transcript } from "./harness.ts";
 
 // ENSURE-1: the Citi Bike flow end to end over HTTP with the real model, answering the
@@ -71,8 +72,11 @@ describe.skipIf(!LIVE || !process.env.OPENROUTER_API_KEY)("ENSURE-1: Citi Bike P
         const response = await api(server, "GET", `/pearls/${pearlId}/data?size=${size}`);
         expect(response.status).toBe(200);
         const data = PearlDataSchema.parse(response.body);
+        expect(data.size).toBe(size);
         expect(data.stale).toBe(false);
         expect(data.output.value.trim()).not.toBe("");
+        const fit = fitToSize(data.output, size);
+        expect(fit.ok ? [] : fit.errors).toEqual([]);
         console.log(`[e2e] citibike ${size}: ${JSON.stringify(data.output)}`);
       }
 
@@ -82,16 +86,51 @@ describe.skipIf(!LIVE || !process.env.OPENROUTER_API_KEY)("ENSURE-1: Citi Bike P
       console.log(`[e2e] citibike stored inputs: ${JSON.stringify(pearl.inputs)}`);
       expect(pearl.sources.some((source) => source.builtin === "gbfs")).toBe(true);
       expect(Object.values(pearl.inputs).some(isCandidateList)).toBe(true);
-      const stored = JSON.stringify(pearl.inputs);
-      expect(stored).not.toMatch(/\b11\s+W(?:est)?\.?\s+19(?:th)?\b/i);
-      expect(stored).not.toMatch(/\b10011\b/);
+      expect(officeTraces(pearl)).toEqual([]);
     },
     600_000,
   );
 });
 
-/** A list of stations: a non-empty array, or a comma-separated string of at least two ids. */
+/** A list of stations: at least two entries, as an array or a comma-separated string of ids. */
 function isCandidateList(value: unknown): boolean {
-  if (Array.isArray(value)) return value.length > 0;
-  return typeof value === "string" && value.split(",").filter((part) => part.trim() !== "").length >= 2;
+  const entries = Array.isArray(value) ? value : typeof value === "string" ? value.split(",").filter((part) => part.trim() !== "") : [];
+  return entries.length >= 2;
+}
+
+// 11 W 19th St, Manhattan.
+const OFFICE = { lat: 40.7394, lon: -73.9923 };
+const COORD_TOLERANCE = 0.001;
+const DECIMAL = /-?\d{1,3}\.\d+/g;
+
+/**
+ * Traces of the office anywhere in the stored Pearl (inputs, source params, transform):
+ * its street address, ZIP, or a latitude/longitude pair at the office. Per-station
+ * entries (objects with an `id` inside an array) are skipped: stations near the
+ * office legitimately sit within the tolerance.
+ */
+function officeTraces(pearl: Pick<Pearl, "inputs" | "sources" | "transform">): string[] {
+  const traces: string[] = [];
+  const everything = JSON.stringify({ inputs: pearl.inputs, sources: pearl.sources, transform: pearl.transform });
+  if (/\b11\s+W(?:est)?\.?\s+19(?:th)?\b/i.test(everything)) traces.push("street address");
+  if (/\b10011\b/.test(everything)) traces.push("ZIP code");
+
+  const numbers: number[] = [];
+  const collect = (value: unknown, isStationEntry: boolean): void => {
+    if (isStationEntry) return;
+    if (typeof value === "number") numbers.push(value);
+    else if (typeof value === "string") numbers.push(...(value.match(DECIMAL) ?? []).map(Number));
+    else if (Array.isArray(value)) {
+      for (const item of value) collect(item, typeof item === "object" && item !== null && !Array.isArray(item) && "id" in item);
+    } else if (typeof value === "object" && value !== null) {
+      for (const item of Object.values(value)) collect(item, false);
+    }
+  };
+  collect(pearl.inputs, false);
+  for (const source of pearl.sources) collect(source.params ?? {}, false);
+  numbers.push(...(pearl.transform.match(DECIMAL) ?? []).map(Number));
+  const atOfficeLat = numbers.some((n) => Math.abs(n - OFFICE.lat) <= COORD_TOLERANCE);
+  const atOfficeLon = numbers.some((n) => Math.abs(n - OFFICE.lon) <= COORD_TOLERANCE);
+  if (atOfficeLat && atOfficeLon) traces.push("office coordinates");
+  return traces;
 }

@@ -25,6 +25,11 @@ const CASES: Record<string, Case> = {
   recurse: { example: recurseExample, requiredEnv: ["RC_PAT"] },
 };
 
+// Offline: a newly registered built-in must get a live case here.
+test("every registered built-in has an example case in the live suite", () => {
+  expect(BUILTINS.map((builtin) => builtin.name).sort()).toEqual(Object.keys(CASES).sort());
+});
+
 describe.skipIf(!LIVE)("ENSURE-2: every built-in refreshes through the data endpoint (live)", () => {
   let server: LiveServer;
   beforeAll(async () => {
@@ -32,10 +37,6 @@ describe.skipIf(!LIVE)("ENSURE-2: every built-in refreshes through the data endp
   });
   afterAll(async () => {
     await server?.stop();
-  });
-
-  test("every registered built-in has an example case here", () => {
-    expect(BUILTINS.map((builtin) => builtin.name).sort()).toEqual(Object.keys(CASES).sort());
   });
 
   for (const [name, { example, requiredEnv }] of Object.entries(CASES)) {

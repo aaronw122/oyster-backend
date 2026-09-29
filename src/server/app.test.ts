@@ -1,5 +1,6 @@
 import { beforeEach, expect, test } from "bun:test";
 import type { Hono } from "hono";
+import { z } from "zod";
 import saveFixture from "../../fixtures/contract/save-pearl-request.json";
 import {
   ApiErrorSchema,
@@ -9,6 +10,9 @@ import {
 } from "../contract/index.ts";
 import { loadConfig } from "../config.ts";
 import { openDb } from "../db/index.ts";
+import { nullAuthResolverFor } from "../runtime/index.ts";
+import type { Builtin } from "../sources/builtins.ts";
+import { createMemorySourceCache } from "../sources/index.ts";
 import { PearlStore } from "../store/pearls.ts";
 import { UserStore } from "../store/users.ts";
 import { type AppEnv, createApp } from "./app.ts";
@@ -18,13 +22,24 @@ let pearls: PearlStore;
 let alice: string;
 let bob: string;
 
+// Offline stand-in for the fixture's `gbfs` builtin (normalized shape the fixture transform reads).
+const fakeGbfs: Builtin = {
+  name: "gbfs",
+  description: "test gbfs",
+  params: z.record(z.string(), z.string()),
+  fetch: async () => ({
+    stations: { "6140.05": { name: "W 21 St & 6 Ave", docksAvailable: 5, isReturning: true } },
+  }),
+};
+
 beforeEach(() => {
   const db = openDb(":memory:");
   pearls = new PearlStore(db);
   const users = new UserStore(db);
   alice = users.issueToken("alice");
   bob = users.issueToken("bob");
-  app = createApp({ config: loadConfig({ NODE_ENV: "test" }), db, pearls, users });
+  const runtime = { pearls, authResolverFor: nullAuthResolverFor, cache: createMemorySourceCache(), builtins: [fakeGbfs] };
+  app = createApp({ config: loadConfig({ NODE_ENV: "test" }), db, pearls, users, runtime });
 });
 
 const send = (method: string, path: string, token?: string, body?: unknown) =>

@@ -12,6 +12,8 @@ import {
   oauth2Adapter,
   STATE_TTL_MS,
 } from "../oauth/index.ts";
+import { nullAuthResolverFor } from "../runtime/index.ts";
+import { createMemorySourceCache } from "../sources/index.ts";
 import { PearlStore } from "../store/pearls.ts";
 import { UserStore } from "../store/users.ts";
 import { type AppEnv, createApp } from "./app.ts";
@@ -55,7 +57,9 @@ beforeEach(() => {
     ["spotify", adapter("spotify")],
   ]);
   tokens = new OAuthTokenStore(db, config.tokenEncryptionKey, providers, { now: () => now });
-  app = createApp({ config, db, pearls: new PearlStore(db), users, oauth: { providers, tokens, now: () => now } });
+  const pearls = new PearlStore(db);
+  const runtime = { pearls, authResolverFor: nullAuthResolverFor, cache: createMemorySourceCache() };
+  app = createApp({ config, db, pearls, users, runtime, oauth: { providers, tokens, now: () => now } });
 });
 
 const pathOf = (url: string) => {

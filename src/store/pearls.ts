@@ -183,6 +183,11 @@ export class PearlStore {
       .run({ id, kind: run.kind, size: run.size, ok: run.ok ? 1 : 0, error: run.error ?? null, now: isoNow() });
   }
 
+  /** Runs `fn` atomically; store calls inside it (which use their own transactions) nest as savepoints. */
+  transaction<T>(fn: () => T): T {
+    return this.#db.transaction(fn)();
+  }
+
   #appendVersion(id: string, reason: string, now: string): void {
     this.#db
       .query(

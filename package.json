@@ -3,10 +3,14 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun --watch src/index.ts",
+    "issue-token": "bun run scripts/issue-token.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "hono": "^4.13.11",
     "quickjs-emscripten": "^0.32.0",
     "zod": "^4.6.5"
   },

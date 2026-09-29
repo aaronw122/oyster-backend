@@ -9,7 +9,12 @@ import { UserStore } from "./store/users.ts";
 const config = loadConfig();
 const db = openDb(config.dbPath);
 const pearls = new PearlStore(db);
-const runtime = { pearls, authResolverFor: nullAuthResolverFor, cache: createMemorySourceCache() };
+const runtime = {
+  pearls,
+  authResolverFor: nullAuthResolverFor,
+  cache: createMemorySourceCache(),
+  sandboxTimeoutMs: config.sandboxTimeoutMs,
+};
 const app = createApp({ config, db, pearls, users: new UserStore(db), runtime });
 const server = Bun.serve({ port: config.port, fetch: app.fetch });
 console.log(`oyster listening on ${server.url}`);

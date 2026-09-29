@@ -117,6 +117,17 @@ test("POST preview is 422 pearl_failed when the live run fails", async () => {
   expect(message).not.toContain("bad feed");
 });
 
+test("POST preview returns only the sizes that fit when some overflow", async () => {
+  const id = await create();
+  payload.value = "Mostly cloudy"; // 13 code points: too long for the lock screen sizes only
+  now += 60_000;
+  const res = await send("POST", `/pearls/${id}/preview`, alice);
+  expect(res.status).toBe(200);
+  const { previews } = PreviewResponseSchema.parse(await res.json());
+  expect(Object.keys(previews).sort()).toEqual(["medium", "small"]);
+  expect(previews.small?.value).toBe("Mostly cloudy");
+});
+
 test("save is 422 pearl_failed with a plain message when the output doesn't fit, and persists nothing", async () => {
   payload.value = "Partly cloudy skies"; // too long for the lock screen sizes
   const message = await expectError(await send("POST", "/pearls", alice, body), 422, "pearl_failed");

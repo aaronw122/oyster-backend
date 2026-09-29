@@ -30,8 +30,13 @@ export type RuntimeDeps = {
   /** Shared across requests so a widget burst doesn't refetch every source. */
   cache: SourceCache;
   fetch?: typeof fetch;
-  /** Repair hook: called for every failed refresh of a saved Pearl. */
-  onRefreshFailure?: (pearl: Pearl, failure: RunFailure) => void;
+  /**
+   * Repair hook: called (asynchronously, errors swallowed) for each failed refresh
+   * of the Pearl's current version. `sensitive` tells repair to redact source data.
+   */
+  onRefreshFailure?: (pearl: Pearl, failure: RunFailure, ctx: { sensitive: boolean }) => void;
+  /** Transform time limit per run; the sandbox default (250ms) is too tight under load. */
+  sandboxTimeoutMs?: number;
   /** SSRF-guard DNS override (tests); defaults to system DNS. */
   resolveHost?: HostResolver;
   /** Builtin registry override (tests); defaults to the shared registry. */
@@ -62,7 +67,7 @@ export async function execute(userId: string, draft: DraftPearl, deps: RuntimeDe
     };
   }
 
-  const transformed = await runTransform(draft.transform, fetched.data, draft.inputs);
+  const transformed = await runTransform(draft.transform, fetched.data, draft.inputs, { timeoutMs: deps.sandboxTimeoutMs });
   if (!transformed.ok) {
     const { kind, message } = transformed.error;
     return {
@@ -112,7 +117,7 @@ export async function runDraft(userId: string, draft: DraftPearl, deps: RuntimeD
 }
 
 /** True when any source is marked sensitive or uses a builtin marked sensitive (e.g. Plaid). */
-function isSensitive(draft: DraftPearl, deps: RuntimeDeps): boolean {
+export function isSensitive(draft: DraftPearl, deps: RuntimeDeps): boolean {
   return draft.sources.some((source) => {
     if (source.sensitive === true) return true;
     if (source.builtin === undefined) return false;

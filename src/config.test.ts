@@ -36,3 +36,10 @@ test("port and base URL parsing", () => {
   });
   expect(() => loadConfig({ ...SECRETS, PORT: "abc" })).toThrow(/PORT/);
 });
+
+test("SANDBOX_TIMEOUT_MS defaults to 1000 and rejects non-positive values", () => {
+  expect(loadConfig(SECRETS).sandboxTimeoutMs).toBe(1000);
+  expect(loadConfig({ ...SECRETS, SANDBOX_TIMEOUT_MS: "2500" }).sandboxTimeoutMs).toBe(2500);
+  expect(() => loadConfig({ ...SECRETS, SANDBOX_TIMEOUT_MS: "0" })).toThrow(/SANDBOX_TIMEOUT_MS/);
+  expect(() => loadConfig({ ...SECRETS, SANDBOX_TIMEOUT_MS: "fast" })).toThrow(/SANDBOX_TIMEOUT_MS/);
+});

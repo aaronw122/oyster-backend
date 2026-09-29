@@ -16,11 +16,13 @@ let pearls: PearlStore;
 let now: number;
 let payload: Payload;
 let fetchCalls: string[];
-let failures: Array<{ pearl: Pearl; failure: RunFailure }>;
+let failures: Array<{ pearl: Pearl; failure: RunFailure; sensitive: boolean }>;
+let duringFetch: (() => void) | undefined;
 let deps: RuntimeDeps;
 
 const fakeFetch = (async (input: string | URL | Request) => {
   fetchCalls.push(String(input));
+  duringFetch?.();
   return Response.json(payload);
 }) as typeof fetch;
 
@@ -44,13 +46,14 @@ beforeEach(() => {
   payload = { value: "72°", sub: "Sunny", items: [{ label: "High", value: "80°" }, { label: "Low", value: "60°" }, { label: "Wind", value: "5 mph" }] };
   fetchCalls = [];
   failures = [];
+  duringFetch = undefined;
   deps = {
     pearls,
     authResolverFor: nullAuthResolverFor,
     cache: createMemorySourceCache(() => now),
     fetch: fakeFetch,
     resolveHost: async () => ["203.0.113.10"],
-    onRefreshFailure: (pearl, failure) => failures.push({ pearl, failure }),
+    onRefreshFailure: (pearl, failure, { sensitive }) => failures.push({ pearl, failure, sensitive }),
   };
 });
 
@@ -62,6 +65,9 @@ async function saved(): Promise<Pearl> {
 
 const runs = (pearlId: string) =>
   db.query<{ kind: string; size: string | null; ok: number }, [string]>("SELECT kind, size, ok FROM runs WHERE pearl_id = ? ORDER BY id").all(pearlId);
+
+/** Lets the deferred repair hook run. */
+const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 describe("savePearl", () => {
   test("seeds lastGood for all four sizes with projected outputs, status ok, and a save run", async () => {
@@ -109,6 +115,16 @@ describe("savePearl", () => {
     expect(await savePearl("bob", draft, deps, pearl.id)).toEqual({ ok: false, notFound: true });
     expect(fetchCalls).toEqual([]);
   });
+
+  test("save writes are atomic: a failure mid-write persists nothing", async () => {
+    const recordRun = pearls.recordRun.bind(pearls);
+    pearls.recordRun = () => {
+      throw new Error("disk full");
+    };
+    await expect(savePearl("alice", draft, deps)).rejects.toThrow("disk full");
+    pearls.recordRun = recordRun;
+    expect(pearls.list("alice")).toEqual([]);
+  });
 });
 
 describe("getPearlData", () => {
@@ -131,11 +147,66 @@ describe("getPearlData", () => {
     now += 60_000;
     const result = await getPearlData("alice", pearl.id, "medium", deps);
     expect(result).toMatchObject({ status: 200, body: { stale: true, version: 1, output: { value: "72°" } } });
+    await settle();
     expect(failures).toHaveLength(1);
     expect(failures[0]!.pearl.id).toBe(pearl.id);
     expect(failures[0]!.failure).toMatchObject({ stage: "transform" });
     expect(failures[0]!.failure.detail).toContain("boom");
+    expect(failures[0]!.sensitive).toBe(false);
     expect(runs(pearl.id).at(-1)).toEqual({ kind: "refresh", size: "medium", ok: 0 });
+  });
+
+  test("the repair hook is told when the Pearl's sources are sensitive", async () => {
+    const pearl = pearls.create("alice", { ...draft, sources: [{ ...draft.sources[0]!, sensitive: true }] });
+    payload.fail = true;
+    await getPearlData("alice", pearl.id, "small", deps);
+    await settle();
+    expect(failures.map((f) => f.sensitive)).toEqual([true]);
+  });
+
+  test("a throwing repair hook never changes the response", async () => {
+    const pearl = await saved();
+    payload.fail = true;
+    now += 60_000;
+    deps.onRefreshFailure = () => {
+      throw new Error("repair queue down");
+    };
+    const logged: unknown[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => logged.push(...args);
+    try {
+      const result = await getPearlData("alice", pearl.id, "small", deps);
+      expect(result).toMatchObject({ status: 200, body: { stale: true, output: { value: "72°" } } });
+      await settle();
+    } finally {
+      console.error = originalError;
+    }
+    expect(logged).toContainEqual(expect.objectContaining({ message: "repair queue down" }));
+  });
+
+  test("a run superseded by a newer version doesn't overwrite last-good or trigger repair", async () => {
+    const pearl = await saved();
+    now += 60_000;
+    payload.value = "68°";
+    duringFetch = () => pearls.replaceTransform(pearl.id, draft.transform, "repair");
+    const fresh = await getPearlData("alice", pearl.id, "small", deps);
+    expect(fresh).toMatchObject({ status: 200, body: { stale: false, version: 1 } });
+    expect(pearls.getById(pearl.id)).toMatchObject({ version: 2, lastGood: { small: { version: 1, output: { value: "72°" } } } });
+
+    now += 60_000;
+    payload.fail = true;
+    duringFetch = () => pearls.replaceTransform(pearl.id, draft.transform, "repair");
+    await getPearlData("alice", pearl.id, "small", deps);
+    await settle();
+    expect(failures).toEqual([]);
+  });
+
+  test("the transform time limit comes from sandboxTimeoutMs", async () => {
+    const pearl = pearls.create("alice", { ...draft, transform: "() => { while (true) {} }" });
+    deps.sandboxTimeoutMs = 40;
+    await getPearlData("alice", pearl.id, "small", deps);
+    await settle();
+    expect(failures[0]!.failure.detail).toContain("40ms");
   });
 
   test("failure with no last-good for that size is 503 unavailable with a plain message", async () => {
@@ -155,6 +226,7 @@ describe("getPearlData", () => {
     const small = await getPearlData("alice", pearl.id, "small", deps);
     expect(inline).toMatchObject({ status: 200, body: { stale: true, output: { value: "72°" } } });
     expect(small).toMatchObject({ status: 200, body: { stale: false, output: { value: "Mostly cloudy" } } });
+    await settle();
     expect(failures.map((f) => f.failure)).toEqual([expect.objectContaining({ stage: "fit", sizes: ["inline"] })]);
   });
 

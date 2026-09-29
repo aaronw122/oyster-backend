@@ -1,0 +1,54 @@
+[
+  {
+    "person": { "id": 6691, "name": "Wren Castillo" },
+    "date": "2026-09-29",
+    "app_data": {},
+    "notes": "",
+    "created_at": "2026-09-29T00:20:37-04:00",
+    "updated_at": "2026-09-29T00:20:37-04:00",
+    "created_by_app": "V.A.L.E.T.",
+    "updated_by_app": "V.A.L.E.T."
+  },
+  {
+    "person": { "id": 7012, "name": "Ada Okafor" },
+    "date": "2026-09-29",
+    "app_data": { "source": "batchmate.app" },
+    "notes": "  pairing  ",
+    "created_at": "2026-09-29T09:41:12-04:00",
+    "updated_at": "2026-09-29T09:41:12-04:00",
+    "created_by_app": "Batchmate App",
+    "updated_by_app": "Batchmate App"
+  },
+  {
+    "person": { "id": 7208, "name": "Milo Hartmann" },
+    "date": "2026-09-29",
+    "app_data": {
+      "manual_entry": { "logged_by_name": "Faculty Member", "logged_by_person_id": 12 }
+    },
+    "notes": "",
+    "created_at": "2026-09-29T10:02:55-04:00",
+    "updated_at": "2026-09-29T10:02:55-04:00",
+    "created_by_app": "Manual: Faculty Member",
+    "updated_by_app": "Manual: Faculty Member"
+  },
+  {
+    "person": { "id": 7430, "name": "Beatriz Lindqvist" },
+    "date": "2026-09-29",
+    "app_data": {},
+    "notes": "   ",
+    "created_at": "2026-09-29T10:15:03-04:00",
+    "updated_at": "2026-09-29T10:15:03-04:00",
+    "created_by_app": "V.A.L.E.T.",
+    "updated_by_app": "V.A.L.E.T."
+  },
+  {
+    "person": { "id": 7611, "name": "Kenji Arroyo" },
+    "date": "2026-09-29",
+    "app_data": {},
+    "notes": "",
+    "created_at": "2026-09-29T11:30:48-04:00",
+    "updated_at": "2026-09-29T11:30:48-04:00",
+    "created_by_app": "Hub Kiosk",
+    "updated_by_app": "Hub Kiosk"
+  }
+]

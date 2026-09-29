@@ -17,6 +17,9 @@ export type TurnEnd = EndReason | "text" | "limit" | "error";
 const LIMIT_TEXT = "Sorry — I couldn't find a way to get that data within my limits. Try asking for something more specific.";
 const ERROR_TEXT = "Something went wrong on my side. Please try again.";
 const NO_MODEL_TEXT = "The assistant isn't set up on this server yet.";
+// A step is a short reply or one tool call (a transform is well under this). Without a cap the
+// provider reserves the model maximum (64k) per request, which OpenRouter bills/limits against.
+const MAX_OUTPUT_TOKENS = 3_072;
 // OpenRouter caps session_id at 256 characters.
 const MAX_SESSION_ID = 256;
 
@@ -71,6 +74,7 @@ export async function runAgentTurn(opts: {
       },
       messages: input,
       tools,
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
       // Sticky provider routing for this chat, so its prompt cache stays warm.
       providerOptions: { openrouter: { session_id: opts.sessionId.slice(0, MAX_SESSION_ID) } },
       stopWhen: [isStepCount(limits.maxSteps), () => state.ended !== null],

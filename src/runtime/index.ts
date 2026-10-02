@@ -1,3 +1,4 @@
+export { modelSafeDetail } from "./detail.ts";
 export { getPearlData, previewPearl, type RuntimeError, savePearl } from "./pearls.ts";
 export {
   type DraftPearl,

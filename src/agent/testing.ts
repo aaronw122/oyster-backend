@@ -85,6 +85,7 @@ export const bankBuiltin: Builtin = {
 export const bankAdapter: OAuthProviderAdapter = {
   id: "bank",
   displayName: "your bank",
+  apiOrigins: ["https://api.bank.test"],
   authorizeUrl: async () => "https://bank.example/authorize",
   exchange: async () => ({ accessToken: "unused" }),
 };
@@ -117,6 +118,7 @@ export function createTestEnv(): TestEnv {
   const runtime: RuntimeDeps = {
     pearls,
     authResolverFor: (userId) => tokens.resolverFor(userId),
+    apiOrigins: (provider) => providers.get(provider)?.apiOrigins,
     // No caching: tests change `payload` between steps and expect the next run to see it.
     cache: { get: () => undefined, set: () => undefined },
     fetch: fakeFetch,

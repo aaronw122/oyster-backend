@@ -2,7 +2,15 @@ import type { Pearl, PearlSource } from "../contract/index.ts";
 import { type Builtin, type BuiltinContext, getBuiltin } from "./builtins.ts";
 import { fillInputs, fillTemplate } from "./template.ts";
 import { assertPublicUrl, type HostResolver, resolveHostWithDns } from "./url-guard.ts";
-import { type AuthCredential, type AuthResolver, type SourceCache, SourceError, type SourceErrorKind } from "./types.ts";
+import {
+  type ApiOriginsLookup,
+  type AuthCredential,
+  type AuthResolver,
+  DEFAULT_MAX_SOURCE_BYTES,
+  type SourceCache,
+  SourceError,
+  type SourceErrorKind,
+} from "./types.ts";
 
 const DEFAULT_TTL_MS = 30_000;
 const DEFAULT_TIMEOUT_MS = 8_000;
@@ -19,8 +27,12 @@ export type FetchSourcesDeps = {
   defaultTtlMs?: number;
   /** Per-request timeout for URL sources; default 8s. */
   timeoutMs?: number;
+  /** Response body cap in bytes for URL sources; default `DEFAULT_MAX_SOURCE_BYTES`. */
+  maxBytes?: number;
   /** DNS resolver for the URL-source SSRF guard; defaults to system DNS. */
   resolveHost?: HostResolver;
+  /** Where each sign-in provider's credential may go; without it every signed-in URL source is refused. */
+  apiOrigins?: ApiOriginsLookup;
   /** Builtin lookup override (tests); defaults to the shared registry. */
   builtins?: readonly Builtin[];
   /** Env passed to builtins; defaults to `process.env`. */
@@ -56,8 +68,11 @@ async function fetchSource(
   let auth: AuthCredential | null = null;
   try {
     const builtin = source.builtin === undefined ? undefined : lookupBuiltin(source.builtin, deps);
+    const url = builtin || source.url === undefined ? undefined : fillTemplate(source.url, inputs);
     const provider = builtin ? builtin.auth?.provider : source.auth?.provider;
     if (provider !== undefined) {
+      // A model-chosen URL never gets a credential its provider's API doesn't own.
+      if (url !== undefined) assertCredentialTarget(url, provider, deps.apiOrigins);
       auth = await deps.resolveAuth(provider);
       if (!auth) throw new SourceError("auth_missing", `no ${provider} credential; the user must connect ${provider}`);
     }
@@ -69,8 +84,7 @@ async function fetchSource(
       const ctx = { fetch: deps.fetch ?? fetch, auth, cache: deps.cache, env: deps.env ?? process.env };
       target = `builtin:${builtin.name}:${JSON.stringify(Object.entries(params).sort(([a], [b]) => (a < b ? -1 : 1)))}`;
       load = () => runBuiltin(builtin, params, ctx);
-    } else if (source.url !== undefined) {
-      const url = fillTemplate(source.url, inputs);
+    } else if (url !== undefined) {
       target = `url:${url}`;
       load = () => getJson(url, auth, deps);
     } else {
@@ -142,11 +156,31 @@ async function getJson(url: string, auth: AuthCredential | null, deps: FetchSour
   }
 }
 
-export type GuardedGetDeps = Pick<FetchSourcesDeps, "fetch" | "timeoutMs" | "resolveHost">;
+export type GuardedGetDeps = Pick<FetchSourcesDeps, "fetch" | "timeoutMs" | "resolveHost" | "maxBytes">;
+
+/**
+ * Throws `forbidden_url` unless `url` is https on one of `provider`'s API
+ * origins. Call it before resolving the credential, so a token is never even
+ * loaded for a host its provider doesn't own.
+ */
+export function assertCredentialTarget(url: string, provider: string, apiOrigins: ApiOriginsLookup | undefined): void {
+  const origins = apiOrigins?.(provider);
+  if (!origins) throw new SourceError("forbidden_url", `"${provider}" is not a sign-in provider, so no sign-in can be sent`);
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new SourceError("forbidden_url", `"${url}" is not a valid URL`);
+  }
+  if (parsed.protocol !== "https:" || !origins.includes(parsed.origin)) {
+    throw new SourceError("forbidden_url", `the ${provider} sign-in is only sent over https to ${origins.join(", ")}`);
+  }
+}
 
 /**
  * SSRF-guarded GET (every redirect hop must be a public host) with one deadline
- * for all hops and the body. `auth` is sent only to the original origin.
+ * for all hops and the body, and a body cap (`maxBytes`). `auth` is sent only to
+ * the original origin; a 401/403 to a request that carried it is `auth_missing`.
  * Throws `SourceError`; messages never contain the credential.
  */
 export async function guardedGet(
@@ -166,10 +200,13 @@ export async function guardedGet(
     let target = await assertPublicUrl(url, resolveHost);
     const authOrigin = target.origin;
     let response: Response;
+    /** The credential on the latest request (null once a redirect leaves the original origin). */
+    let sentAuth: AuthCredential | null;
     for (let redirects = 0; ; redirects++) {
       const headers: Record<string, string> = { Accept: accept };
       // Like browsers, never forward the credential to a different origin.
-      if (auth && target.origin === authOrigin) headers.Authorization = `Bearer ${auth.accessToken}`;
+      sentAuth = target.origin === authOrigin ? auth : null;
+      if (sentAuth) headers.Authorization = `Bearer ${sentAuth.accessToken}`;
       response = await (deps.fetch ?? fetch)(target.href, {
         method: "GET",
         headers,
@@ -184,9 +221,13 @@ export async function guardedGet(
     }
     if (!response.ok) {
       await response.body?.cancel();
+      if (sentAuth && (response.status === 401 || response.status === 403)) {
+        throw new SourceError("auth_missing", `GET ${url} returned HTTP ${response.status}: the ${sentAuth.provider} sign-in was refused`);
+      }
       throw new SourceError("http", `GET ${url} returned HTTP ${response.status}`);
     }
-    return { text: await response.text(), contentType: response.headers.get("content-type") ?? "" };
+    const text = await readCapped(response, deps.maxBytes ?? DEFAULT_MAX_SOURCE_BYTES, url);
+    return { text, contentType: response.headers.get("content-type") ?? "" };
   } catch (error) {
     if (error instanceof SourceError) throw error;
     if (controller.signal.aborted) throw new SourceError("network", `GET ${url} timed out after ${timeoutMs}ms`);
@@ -195,4 +236,28 @@ export async function guardedGet(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** The body as UTF-8 text, refusing a declared or streamed size over `maxBytes` without buffering past it. */
+async function readCapped(response: Response, maxBytes: number, url: string): Promise<string> {
+  const tooLarge = () => new SourceError("too_large", `GET ${url} returned more than the ${maxBytes}-byte limit`);
+  if (Number(response.headers.get("content-length")) > maxBytes) {
+    await response.body?.cancel();
+    throw tooLarge();
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks, total));
 }

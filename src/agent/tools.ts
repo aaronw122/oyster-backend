@@ -4,9 +4,17 @@ import { z } from "zod";
 import type { Config } from "../config.ts";
 import { type ChatEvent, PearlSourceSchema, type Size, type WidgetOutput } from "../contract/index.ts";
 import { createOAuthStartUrl, type OAuthDeps } from "../oauth/index.ts";
-import { type DraftPearl, isSensitiveProvider, type RunFailure, runDraft, type RuntimeDeps, savePearl } from "../runtime/index.ts";
+import {
+  type DraftPearl,
+  isSensitiveProvider,
+  modelSafeDetail,
+  type RunFailure,
+  runDraft,
+  type RuntimeDeps,
+  savePearl,
+} from "../runtime/index.ts";
 import { type Builtin, listBuiltins } from "../sources/builtins.ts";
-import { guardedGet, type HostResolver, SourceError, summarizeJson } from "../sources/index.ts";
+import { assertCredentialTarget, guardedGet, type HostResolver, SourceError, summarizeJson } from "../sources/index.ts";
 import type { PearlStore } from "../store/pearls.ts";
 import { lintUserFacingText } from "./lint.ts";
 import { createWebSearch, type WebSearch } from "./search.ts";
@@ -169,7 +177,7 @@ export function createTools(ctx: ToolContext): ToolSet {
   const failureResult = (failure: RunFailure, sensitive: boolean) => ({
     ok: false as const,
     stage: failure.stage,
-    error: sensitive && failure.stage !== "fit" ? maskValues(failure.detail) : failure.detail,
+    error: modelSafeDetail(failure, sensitive),
     ...(failure.sizes ? { sizes: failure.sizes } : {}),
   });
 
@@ -186,7 +194,7 @@ export function createTools(ctx: ToolContext): ToolSet {
       ok: true,
       fitsAllSizes: false,
       tooLongFor: run.failure.sizes ?? [],
-      sizeProblems: run.failure.detail,
+      sizeProblems: modelSafeDetail(run.failure, sensitive),
       ...outputView(run.output, sensitive),
     };
   };
@@ -202,16 +210,19 @@ export function createTools(ctx: ToolContext): ToolSet {
     return { ok: true, shownToUser: true, previews: run.previews };
   };
 
-  const signInStatus = (provider: string) => ({
+  /** Connected means a usable credential now (refreshed if needed), not merely a stored row. */
+  const isConnected = async (provider: string) => (await services.oauth?.tokens.get(userId, provider)) != null;
+
+  const signInStatus = async (provider: string) => ({
     provider,
     available: services.oauth?.providers.has(provider) ?? false,
-    connected: services.oauth?.tokens.has(userId, provider) ?? false,
+    connected: await isConnected(provider),
   });
 
   const discovery = {
     find_builtin: tool({
       description:
-        "List Oyster's built-in integrations (purpose, params, output shape, sign-in needs) and the pre-registered sign-in providers. With `builtin` + `query`, search that builtin's catalog (e.g. a station name → stop ids) when it supports lookup.",
+        "List Oyster's built-in integrations (purpose, params, output shape, sign-in needs) and the pre-registered sign-in providers with the API origins their sign-in is sent to. With `builtin` + `query`, search that builtin's catalog (e.g. a station name → stop ids) when it supports lookup.",
       inputSchema: z.object({
         builtin: z.string().optional().describe("Builtin name to describe or search."),
         query: z.string().optional().describe("Plain-language search within `builtin`'s catalog."),
@@ -232,19 +243,24 @@ export function createTools(ctx: ToolContext): ToolSet {
           }
           return {
             ok: true,
-            builtins: selected.map((builtin) => ({
-              name: builtin.name,
-              description: builtin.description,
-              params: paramsJsonSchema(builtin),
-              lookup: builtin.lookup !== undefined,
-              ...(builtin.sensitive ? { sensitive: true } : {}),
-              ...(builtin.auth ? { signIn: signInStatus(builtin.auth.provider) } : {}),
-            })),
-            signInProviders: [...(services.oauth?.providers.values() ?? [])].map((adapter) => ({
-              id: adapter.id,
-              name: adapter.displayName,
-              connected: services.oauth?.tokens.has(userId, adapter.id) ?? false,
-            })),
+            builtins: await Promise.all(
+              selected.map(async (builtin) => ({
+                name: builtin.name,
+                description: builtin.description,
+                params: paramsJsonSchema(builtin),
+                lookup: builtin.lookup !== undefined,
+                ...(builtin.sensitive ? { sensitive: true } : {}),
+                ...(builtin.auth ? { signIn: await signInStatus(builtin.auth.provider) } : {}),
+              })),
+            ),
+            signInProviders: await Promise.all(
+              [...(services.oauth?.providers.values() ?? [])].map(async (adapter) => ({
+                id: adapter.id,
+                name: adapter.displayName,
+                apiOrigins: adapter.apiOrigins,
+                connected: await isConnected(adapter.id),
+              })),
+            ),
           };
         },
       ),
@@ -266,7 +282,10 @@ export function createTools(ctx: ToolContext): ToolSet {
       description: `GET a public URL. JSON responses come back as a compressed shape summary (\`path: type = sample\`; samples omitted for sensitive data); HTML/text (e.g. API docs) as readable text. At most ${limits.maxFetchProbes} calls per turn.`,
       inputSchema: z.object({
         url: z.string().min(1).describe("Absolute http(s) URL of a public host."),
-        auth: z.string().optional().describe("Sign-in provider id whose token the server should attach."),
+        auth: z
+          .string()
+          .optional()
+          .describe("Sign-in provider id whose token the server should attach. The URL must then be https on one of that provider's apiOrigins (find_builtin lists them)."),
         sensitive: z.boolean().optional().describe("True for the user's personal financial data; hides sample values."),
       }),
       execute: guarded(
@@ -277,18 +296,32 @@ export function createTools(ctx: ToolContext): ToolSet {
             state.exhausted = true;
             return LIMIT_REACHED;
           }
+          if (provider !== undefined) {
+            try {
+              assertCredentialTarget(url, provider, runtime.apiOrigins);
+            } catch (error) {
+              if (!(error instanceof SourceError)) throw error;
+              return { ok: false, kind: error.kind, error: error.message };
+            }
+          }
           const credential = provider === undefined ? null : await runtime.authResolverFor(userId)(provider);
           if (provider !== undefined && !credential) {
-            return { ok: false, error: `The user hasn't connected ${provider}. Call start_oauth first.` };
+            return { ok: false, kind: "auth_missing", error: `The user hasn't connected ${provider}. Call start_oauth first.` };
           }
           const redact = sensitive === true || isSensitiveProvider(provider, runtime);
           const scrub = (text: string) => (credential ? text.split(credential.accessToken).join("[redacted]") : text);
           let body: { text: string; contentType: string };
           try {
-            body = await guardedGet(url, credential, { fetch: doFetch, resolveHost: services.resolveHost ?? runtime.resolveHost }, "application/json, text/html;q=0.8, text/plain;q=0.5");
+            body = await guardedGet(
+              url,
+              credential,
+              { fetch: doFetch, resolveHost: services.resolveHost ?? runtime.resolveHost, maxBytes: runtime.maxSourceBytes },
+              "application/json, text/html;q=0.8, text/plain;q=0.5",
+            );
           } catch (error) {
             if (!(error instanceof SourceError)) throw error;
-            return { ok: false, kind: error.kind, error: scrub(error.message) };
+            const hint = error.kind === "auth_missing" ? " Call start_oauth with reconnect: true." : "";
+            return { ok: false, kind: error.kind, error: `${scrub(error.message)}${hint}` };
           }
           let json: unknown;
           try {
@@ -379,9 +412,12 @@ export function createTools(ctx: ToolContext): ToolSet {
 
     start_oauth: tool({
       description:
-        "Ask the user to sign in with a pre-registered provider so the server can read their data. Only providers listed by find_builtin are possible. Ends the turn; the user will say when they've signed in.",
-      inputSchema: z.object({ provider: z.string().min(1).describe("Provider id, e.g. from find_builtin's signInProviders.") }),
-      execute: guarded(null, async ({ provider }: { provider: string }) => {
+        "Ask the user to sign in with a pre-registered provider so the server can read their data. Only providers listed by find_builtin are possible. Pass `reconnect: true` after a tool reported auth_missing for that provider (its sign-in expired or was refused). Ends the turn unless the user is already connected; the user will say when they've signed in.",
+      inputSchema: z.object({
+        provider: z.string().min(1).describe("Provider id, e.g. from find_builtin's signInProviders."),
+        reconnect: z.boolean().optional().describe("Sign in again even if a connection exists (after auth_missing)."),
+      }),
+      execute: guarded(null, async ({ provider, reconnect }: { provider: string; reconnect?: boolean }) => {
         const adapter = services.oauth?.providers.get(provider);
         if (!services.oauth || !adapter) {
           const available = [...(services.oauth?.providers.keys() ?? [])];
@@ -390,11 +426,17 @@ export function createTools(ctx: ToolContext): ToolSet {
             error: `"${provider}" is not a pre-registered sign-in provider. Available: ${available.length ? available.join(", ") : "none"}.`,
           };
         }
-        if (services.oauth.tokens.has(userId, provider)) return { ok: true, alreadyConnected: true };
+        const { apiOrigins } = adapter;
+        if (reconnect !== true && (await isConnected(provider))) return { ok: true, alreadyConnected: true, apiOrigins };
         // The signed start URL goes only to the app; the model never sees it.
         emit({ type: "oauth", provider, url: createOAuthStartUrl(services.config, userId, provider) });
         state.ended = "oauth";
-        return { ok: true, shownToUser: true, note: `Sign-in to ${adapter.displayName} offered. Wait for the user.` };
+        return {
+          ok: true,
+          shownToUser: true,
+          apiOrigins,
+          note: `Sign-in to ${adapter.displayName} offered. Wait for the user.`,
+        };
       }),
     }),
 
@@ -442,11 +484,6 @@ export function createTools(ctx: ToolContext): ToolSet {
 }
 
 const FALLBACK_UNAVAILABLE = "Sorry — I couldn't find a way to get that data right now.";
-
-/** Masks quoted strings and numbers so an error from a sensitive run can't carry values. */
-export function maskValues(text: string): string {
-  return text.replace(/"[^"]*"|'[^']*'|`[^`]*`/g, '"…"').replace(/\d+(?:[.,]\d+)*/g, "#");
-}
 
 function paramsJsonSchema(builtin: Builtin): unknown {
   try {

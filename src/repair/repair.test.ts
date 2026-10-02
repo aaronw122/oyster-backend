@@ -174,7 +174,7 @@ describe("repair", () => {
     const body: SavePearlRequest = {
       name: "Checking",
       inputs: {},
-      sources: [{ id: "b", url: "https://bank.test/balance", method: "GET", auth: { provider: "bank" } }],
+      sources: [{ id: "b", url: "https://api.bank.test/balance", method: "GET", auth: { provider: "bank" } }],
       transform: `(s, inputs, std) => ({ value: std.formatMoney(s.b.account.balance), subtitle: s.b.account.owner })`,
     };
     env.payload.current = { account: { balance: 4821.37, owner: "Jane Quinn" } };
@@ -186,6 +186,27 @@ describe("repair", () => {
     const told = modelVisible(model);
     expect(told).toContain("acct.balance: number");
     for (const value of ["5310", "5,310", "Jane", "Quinn", "tok-secret-123"]) expect(told).not.toContain(value);
+  });
+
+  test("a value a sensitive transform puts in its own error never reaches the repair model", async () => {
+    const hub: SavePearlRequest = {
+      name: "Hub notes",
+      inputs: {},
+      sources: [{ id: "hub", url: "https://hub.test/visitors", method: "GET", sensitive: true }],
+      transform: `(s) => { const v = s.hub.visitors[0]; if (!v.notes) throw new Error("no note for " + v.name); return { value: v.notes }; }`,
+    };
+    env.payload.current = { visitors: [{ id: 1, name: "Ada Lovelace", notes: "Hi" }] };
+    const pearl = await save(hub);
+    env.payload.current = { visitors: [{ id: 1, name: "Ada Lovelace", notes: null }] };
+    const model = scriptedModel([{ calls: [{ tool: "test_pearl", input: { transform: hub.transform } }] }, { text: "Giving up." }]);
+    const queue = wire(model);
+
+    await refresh(queue, pearl, ["small"]);
+    const told = modelVisible(model);
+    // The repair message and the test_pearl result both name the error but hide its text.
+    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain("Error (message hidden)");
+    expect(JSON.stringify(toolResultsSeen(model, "test_pearl"))).toContain("Error (message hidden)");
+    for (const value of ["Ada", "Lovelace"]) expect(told).not.toContain(value);
   });
 
   test("while a repair runs the Pearl is 'repairing' and refreshes still serve last-good", async () => {

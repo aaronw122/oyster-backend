@@ -50,14 +50,6 @@ export class OAuthTokenStore {
       .run({ userId, provider, ciphertext, iv, tag: cipher.getAuthTag(), now: isoNow(new Date(this.#now())) });
   }
 
-  has(userId: string, provider: string): boolean {
-    return (
-      this.#db
-        .query("SELECT 1 FROM oauth_tokens WHERE user_id = $userId AND provider = $provider")
-        .get({ userId, provider }) !== null
-    );
-  }
-
   /**
    * A usable credential, refreshing (and persisting) a token that is expired or
    * about to expire when the provider supports it. If that refresh isn't possible

@@ -63,6 +63,7 @@ function fakeTokenEndpoint(responses: Array<{ status?: number; json: unknown }>)
 const baseCfg = {
   id: "demo",
   displayName: "Demo",
+  apiOrigins: ["https://api.example"],
   authorizeEndpoint: "https://auth.example/authorize",
   tokenEndpoint: "https://auth.example/token",
   clientId: "client-id",
@@ -176,6 +177,27 @@ describe("providers", () => {
       for (const scope of scopes) expect(scope).toMatch(/(^read(:|$)|\.readonly$|-read(-|$)|:read$)/);
     }
   });
+
+  test("each preset's tokens are bound to its own https API origins", () => {
+    const env: Record<string, string> = {};
+    for (const id of ["GITHUB", "GOOGLE", "SPOTIFY", "STRAVA"]) {
+      env[`OAUTH_${id}_CLIENT_ID`] = "id";
+      env[`OAUTH_${id}_CLIENT_SECRET`] = "secret";
+    }
+    const origins = Object.fromEntries([...loadProviders(env).values()].map((adapter) => [adapter.id, adapter.apiOrigins]));
+    expect(origins).toEqual({
+      github: ["https://api.github.com"],
+      google: ["https://www.googleapis.com", "https://tasks.googleapis.com"],
+      spotify: ["https://api.spotify.com"],
+      strava: ["https://www.strava.com"],
+    });
+  });
+
+  test("an adapter refuses API origins that aren't bare https origins", () => {
+    for (const origin of ["http://api.example", "https://api.example/", "https://api.example/v1"]) {
+      expect(() => oauth2Adapter({ ...baseCfg, apiOrigins: [origin] })).toThrow("bare https origin");
+    }
+  });
 });
 
 describe("OAuthTokenStore", () => {
@@ -192,6 +214,7 @@ describe("OAuthTokenStore", () => {
   const refreshingAdapter = (onRefresh: (t: StoredToken) => Promise<StoredToken>): OAuthProviderAdapter => ({
     id: "demo",
     displayName: "Demo",
+    apiOrigins: ["https://api.example"],
     authorizeUrl: async () => "https://auth.example",
     exchange: async () => ({ accessToken: "unused" }),
     refresh: onRefresh,
@@ -205,8 +228,6 @@ describe("OAuthTokenStore", () => {
     const row = db.query<{ ciphertext: Uint8Array }, []>("SELECT ciphertext FROM oauth_tokens").get();
     expect(Buffer.from(row?.ciphertext ?? []).toString("latin1")).not.toContain("plain-access-token");
 
-    expect(store.has("alice", "demo")).toBe(true);
-    expect(store.has("bob", "demo")).toBe(false);
     expect(await store.get("alice", "demo")).toEqual({ provider: "demo", accessToken: "plain-access-token" });
     expect(await store.resolverFor("alice")("demo")).toEqual({ provider: "demo", accessToken: "plain-access-token" });
     expect(await store.resolverFor("bob")("demo")).toBeNull();

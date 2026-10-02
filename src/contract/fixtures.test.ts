@@ -5,6 +5,7 @@ import {
   ChatEventSchema,
   HealthResponseSchema,
   MessagesRequestSchema,
+  OAuthLinkResponseSchema,
   PearlDataSchema,
   PearlSchema,
   PearlsListResponseSchema,
@@ -42,6 +43,7 @@ const FIXTURE_SCHEMAS: Record<string, z.ZodType> = {
   "messages-request.json": MessagesRequestSchema,
   "error.json": ApiErrorSchema,
   "health.json": HealthResponseSchema,
+  "oauth-link-response.json": OAuthLinkResponseSchema,
 };
 
 describe("contract fixtures", () => {

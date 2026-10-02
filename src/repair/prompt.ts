@@ -1,6 +1,6 @@
-import { maskValues, TRANSFORM_GUIDE } from "../agent/index.ts";
+import { TRANSFORM_GUIDE } from "../agent/index.ts";
 import type { Pearl, WidgetOutput } from "../contract/index.ts";
-import type { RunFailure } from "../runtime/index.ts";
+import { modelSafeDetail, type RunFailure } from "../runtime/index.ts";
 import { summarizeJson } from "../sources/index.ts";
 
 /**
@@ -36,11 +36,11 @@ export type RepairRequest = {
  * The repair turn's user message: failure, current transform, sources, inputs,
  * what the widget last showed, and the probe. For sensitive Pearls every value is
  * dropped: inputs, last output, and probe become shape-only summaries and the
- * failure detail has quoted text and numbers masked.
+ * failure detail follows `modelSafeDetail`.
  */
 export function buildRepairMessage({ pearl, failure, probe, sensitive }: RepairRequest): string {
   const lastShown: WidgetOutput | undefined = pearl.lastGood?.medium?.output ?? pearl.lastGood?.small?.output;
-  const detail = sensitive && failure.stage !== "fit" ? maskValues(failure.detail) : failure.detail;
+  const detail = modelSafeDetail(failure, sensitive);
   const sections = [
     `Pearl "${pearl.name}" failed to refresh${sensitive ? " (sensitive data: shapes and types only)" : ""}.`,
     `## Failure (${failure.stage})\n${detail}${failure.sizes ? `\nSizes that don't fit: ${failure.sizes.join(", ")}` : ""}`,

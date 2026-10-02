@@ -308,14 +308,17 @@ describe("runDraft", () => {
     expect(await runDraft("alice", viaBuiltin, deps)).toMatchObject({ ok: true, sensitive: true });
   });
 
-  test("fetch failures keep a plain message and a token-free technical detail", async () => {
+  test("a refused sign-in fails as auth_missing with a reconnect message and a token-free detail", async () => {
     const token = "sk-live-SECRET";
     deps.authResolverFor = () => async (provider) => ({ provider, accessToken: token });
+    deps.apiOrigins = (provider) => (provider === "acme" ? ["https://api.test"] : undefined);
     deps.fetch = (async () => new Response(`denied for ${token}`, { status: 401 })) as unknown as typeof fetch;
     const result = await runDraft("alice", { ...draft, sources: [{ ...draft.sources[0]!, auth: { provider: "acme" } }] }, deps);
     expect(result).toMatchObject({ ok: false, failure: { stage: "fetch" } });
     if (result.ok) throw new Error("unreachable");
+    expect(result.failure.detail).toContain("(auth_missing)");
     expect(result.failure.detail).toContain("401");
+    expect(result.failure.message).toContain("reconnect");
     expect(JSON.stringify(result)).not.toContain(token);
     expect(result.failure.message).not.toMatch(/https?:|401|[{}]/);
   });

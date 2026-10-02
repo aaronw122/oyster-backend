@@ -23,6 +23,7 @@ export const PROVIDER_FACTORIES: ProviderFactory[] = [
       oauth2Adapter({
         id: "github",
         displayName: "GitHub",
+        apiOrigins: ["https://api.github.com"],
         authorizeEndpoint: "https://github.com/login/oauth/authorize",
         tokenEndpoint: "https://github.com/login/oauth/access_token",
         ...creds,
@@ -38,6 +39,7 @@ export const PROVIDER_FACTORIES: ProviderFactory[] = [
       oauth2Adapter({
         id: "google",
         displayName: "Google",
+        apiOrigins: ["https://www.googleapis.com", "https://tasks.googleapis.com"],
         authorizeEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
         tokenEndpoint: "https://oauth2.googleapis.com/token",
         ...creds,
@@ -57,6 +59,7 @@ export const PROVIDER_FACTORIES: ProviderFactory[] = [
       oauth2Adapter({
         id: "spotify",
         displayName: "Spotify",
+        apiOrigins: ["https://api.spotify.com"],
         authorizeEndpoint: "https://accounts.spotify.com/authorize",
         tokenEndpoint: "https://accounts.spotify.com/api/token",
         ...creds,
@@ -77,6 +80,7 @@ export const PROVIDER_FACTORIES: ProviderFactory[] = [
       oauth2Adapter({
         id: "strava",
         displayName: "Strava",
+        apiOrigins: ["https://www.strava.com"],
         authorizeEndpoint: "https://www.strava.com/oauth/authorize",
         tokenEndpoint: "https://www.strava.com/oauth/token",
         ...creds,

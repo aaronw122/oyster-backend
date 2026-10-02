@@ -1,3 +1,5 @@
+import { DEFAULT_MAX_SOURCE_BYTES } from "./sources/types.ts";
+
 export type Config = {
   port: number;
   dbPath: string;
@@ -11,6 +13,8 @@ export type Config = {
   tokenEncryptionKey: string;
   /** Per-run transform time limit for saved/draft Pearls (SANDBOX_TIMEOUT_MS). */
   sandboxTimeoutMs: number;
+  /** Largest response body a URL source or fetch probe may return (MAX_SOURCE_BYTES). */
+  maxSourceBytes: number;
 };
 
 type Env = Record<string, string | undefined>;
@@ -45,6 +49,7 @@ export function loadConfig(env: Env = process.env): Config {
     oauthStateSecret: secret("OAUTH_STATE_SECRET"),
     tokenEncryptionKey: parseEncryptionKey(secret("TOKEN_ENCRYPTION_KEY")),
     sandboxTimeoutMs: parseSandboxTimeout(env.SANDBOX_TIMEOUT_MS),
+    maxSourceBytes: parseMaxSourceBytes(env.MAX_SOURCE_BYTES),
   };
 }
 
@@ -83,4 +88,14 @@ function parseSandboxTimeout(raw: string | undefined): number {
     throw new Error(`Invalid SANDBOX_TIMEOUT_MS "${value}": expected a positive integer (milliseconds).`);
   }
   return ms;
+}
+
+function parseMaxSourceBytes(raw: string | undefined): number {
+  const value = nonEmpty(raw);
+  if (value === undefined) return DEFAULT_MAX_SOURCE_BYTES;
+  const bytes = Number(value);
+  if (!Number.isInteger(bytes) || bytes <= 0) {
+    throw new Error(`Invalid MAX_SOURCE_BYTES "${value}": expected a positive integer (bytes).`);
+  }
+  return bytes;
 }

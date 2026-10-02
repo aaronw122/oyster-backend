@@ -2,6 +2,7 @@ import { type Pearl, SIZES, type Size, type WidgetOutput } from "../contract/ind
 import { fitAllSizes, type FitResult, runTransform } from "../sandbox/index.ts";
 import { type Builtin, getBuiltin, listBuiltins } from "../sources/builtins.ts";
 import {
+  type ApiOriginsLookup,
   type AuthResolver,
   fetchSources,
   type HostResolver,
@@ -14,10 +15,18 @@ export type DraftPearl = Pick<Pearl, "sources" | "inputs" | "transform">;
 
 /**
  * Why a run failed. `message` is plain language for people (no JSON, endpoints,
- * or code). `detail` is the technical cause for the agent/repair LLM and logs;
- * it never contains credentials (fetchSources redacts tokens).
+ * or code). `detail` is the technical cause for logs; it never contains
+ * credentials (fetchSources redacts tokens). Model-visible text goes through
+ * `modelSafeDetail`. `thrown` names the error a transform threw itself (its
+ * message is the transform's own text and may carry data values).
  */
-export type RunFailure = { stage: "fetch" | "transform" | "fit"; message: string; detail: string; sizes?: Size[] };
+export type RunFailure = {
+  stage: "fetch" | "transform" | "fit";
+  message: string;
+  detail: string;
+  sizes?: Size[];
+  thrown?: string;
+};
 
 /** A failed run. `output` is the raw transform output when only the fit stage failed, so the agent can see what overflowed. */
 export type DraftRun =
@@ -28,9 +37,13 @@ export type RuntimeDeps = {
   pearls: PearlStore;
   /** OAuth token lookup per user; `nullAuthResolverFor` until OAuth is wired. */
   authResolverFor: (userId: string) => AuthResolver;
+  /** Each sign-in provider's API origins; signed-in URL sources elsewhere are refused (all of them when unset). */
+  apiOrigins?: ApiOriginsLookup;
   /** Shared across requests so a widget burst doesn't refetch every source. */
   cache: SourceCache;
   fetch?: typeof fetch;
+  /** Response body cap for URL sources and probes (MAX_SOURCE_BYTES); defaults to 5 MiB. */
+  maxSourceBytes?: number;
   /**
    * Repair hook: called (asynchronously, errors swallowed) for each failed refresh
    * of the Pearl's current version. `sensitive` tells repair to redact source data.
@@ -55,7 +68,9 @@ export type Execution =
 export async function execute(userId: string, draft: DraftPearl, deps: RuntimeDeps): Promise<Execution> {
   const fetched = await fetchSources(draft, {
     resolveAuth: deps.authResolverFor(userId),
+    apiOrigins: deps.apiOrigins,
     fetch: deps.fetch,
+    maxBytes: deps.maxSourceBytes,
     cache: deps.cache,
     resolveHost: deps.resolveHost,
     builtins: deps.builtins,
@@ -70,13 +85,14 @@ export async function execute(userId: string, draft: DraftPearl, deps: RuntimeDe
 
   const transformed = await runTransform(draft.transform, fetched.data, draft.inputs, { timeoutMs: deps.sandboxTimeoutMs });
   if (!transformed.ok) {
-    const { kind, message } = transformed.error;
+    const { kind, message, thrown } = transformed.error;
     return {
       ok: false,
       failure: {
         stage: "transform",
         message: "The widget couldn't make sense of the latest data.",
         detail: `transform failed (${kind}): ${message}`,
+        ...(thrown ? { thrown } : {}),
       },
     };
   }
@@ -157,6 +173,8 @@ function fetchMessage(kind: SourceErrorKind): string {
       return "Couldn't reach the service this widget gets its data from.";
     case "parse":
       return "The service this widget reads from sent back something unexpected.";
+    case "too_large":
+      return "The service this widget reads from sent back more data than a widget can use.";
     case "template":
     case "forbidden_url":
     case "unknown_builtin":

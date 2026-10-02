@@ -166,6 +166,10 @@ export type SavePearlResponse = z.infer<typeof SavePearlResponseSchema>;
 export const PreviewResponseSchema = z.object({ previews: PreviewsSchema });
 export type PreviewResponse = z.infer<typeof PreviewResponseSchema>;
 
+/** `POST /oauth/:provider/link` (bearer auth): a fresh signed start URL for the caller. */
+export const OAuthLinkResponseSchema = z.object({ url: z.string().url() });
+export type OAuthLinkResponse = z.infer<typeof OAuthLinkResponseSchema>;
+
 // ── §2b Per-size length budgets (Unicode code points; null = not shown) ──────
 export type SizeBudget = {
   value: number;

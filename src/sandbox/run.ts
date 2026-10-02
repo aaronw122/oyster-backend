@@ -10,25 +10,63 @@ import { WidgetOutputSchema, type WidgetOutput } from "../contract/index.ts";
 import { STD_SOURCE } from "./std.ts";
 
 export type TransformErrorKind = "syntax" | "runtime" | "timeout" | "memory" | "shape";
+/**
+ * `thrown` is set when the transform itself threw (`throw new Error(...)`, a
+ * thrown string, ...): the standard error name, or "uncaught exception" for a
+ * non-Error value. Such a message is the transform's own text and can carry data
+ * values; engine-generated errors (e.g. `TypeError: cannot read property ...`)
+ * leave `thrown` unset.
+ */
 export type TransformResult =
   | { ok: true; output: WidgetOutput }
-  | { ok: false; error: { kind: TransformErrorKind; message: string } };
+  | { ok: false; error: { kind: TransformErrorKind; message: string; thrown?: string } };
+
+const ERROR_NAMES = ["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "EvalError", "URIError", "AggregateError"];
 
 const DEFAULT_TIMEOUT_MS = 250;
 const DEFAULT_MEMORY_BYTES = 32 * 1024 * 1024;
 const MAX_STACK_BYTES = 512 * 1024;
+
+// Evaluated before the transform: replaces each standard error constructor with
+// one that records the errors it builds, so a thrown value can be told apart
+// from an error the engine raised itself. `constructor` on each prototype points
+// at the wrapper too, so `err.constructor` can't recover an unrecorded original.
+// Returns `isTransformThrown(value)`: true for anything but an engine error.
+const MARK_THROWN_SOURCE = `(function (names) {
+  "use strict";
+  var made = new WeakSet();
+  var BaseError = Error;
+  names.forEach(function (name) {
+    var Original = globalThis[name];
+    if (typeof Original !== "function") return;
+    var Wrapped = function () {
+      var error = Reflect.construct(Original, arguments, new.target || Original);
+      made.add(error);
+      return error;
+    };
+    Wrapped.prototype = Original.prototype;
+    Object.defineProperty(Wrapped, "name", { value: name });
+    Object.defineProperty(Original.prototype, "constructor", { value: Wrapped, writable: true, configurable: true });
+    globalThis[name] = Wrapped;
+  });
+  return function (value) {
+    return value === null || typeof value !== "object" || !(value instanceof BaseError) || made.has(value);
+  };
+})(${JSON.stringify(ERROR_NAMES)})`;
 
 // Evaluated before the transform runs, so it closes over the pristine
 // `JSON.stringify` / `Array.isArray` / `InternalError` even if the transform
 // overwrites the globals. Returns the JSON text on success or `{ error }` for a
 // shape problem. Nesting is capped via the replacer: QuickJS leaks objects
 // (and then aborts on runtime teardown) when JSON.stringify overflows the stack.
-// Resource errors (InternalError) are rethrown so they keep their real kind.
-const SERIALIZE_SOURCE = `(function (stringify, isArray, InternalErrorCtor) {
+// Resource errors (InternalError) and errors the transform threw (from a getter
+// or `toJSON`) are rethrown so they keep their real kind and stay marked.
+// The returned function carries `isTransformThrown` (see MARK_THROWN_SOURCE).
+const SERIALIZE_SOURCE = `(function (stringify, isArray, InternalErrorCtor, isTransformThrown) {
   "use strict";
   var MAX_DEPTH = 32;
   var TOO_DEEP = {};
-  return function (value) {
+  function serialize(value) {
     if (value === null || typeof value !== "object" || isArray(value)) {
       var got = value === null ? "null" : isArray(value) ? "array" : typeof value;
       return { error: "transform must return a plain object, got " + got };
@@ -50,16 +88,19 @@ const SERIALIZE_SOURCE = `(function (stringify, isArray, InternalErrorCtor) {
       return stringify(value, limitDepth);
     } catch (e) {
       if (e === TOO_DEEP) return { error: "transform output is nested more than " + MAX_DEPTH + " levels deep" };
-      if (e instanceof InternalErrorCtor) throw e;
+      if (e instanceof InternalErrorCtor || isTransformThrown(e)) throw e;
       return { error: "transform output is not JSON-serializable: " + (e && e.message ? e.message : String(e)) };
     }
-  };
-})(JSON.stringify, Array.isArray, InternalError)`;
+  }
+  serialize.isTransformThrown = isTransformThrown;
+  return serialize;
+})(JSON.stringify, Array.isArray, InternalError, ${MARK_THROWN_SOURCE})`;
 
 class TransformFailure extends Error {
   constructor(
     readonly kind: TransformErrorKind,
     message: string,
+    readonly thrown?: string,
   ) {
     super(message);
   }
@@ -115,6 +156,8 @@ async function runInFreshVm(
     const ctx = runtime.newContext();
     context = ctx;
 
+    /** `serialize.isTransformThrown`; until set up, every error is setup code's, never the transform's. */
+    let isTransformThrown: QuickJSHandle | undefined;
     // Keeps successful handles for disposal; turns VM exceptions into a classified TransformFailure.
     const unwrap = (result: VmCallResult<QuickJSHandle>): QuickJSHandle => {
       if (!result.error) {
@@ -122,24 +165,43 @@ async function runInFreshVm(
         return result.value;
       }
       const thrown: unknown = ctx.dump(result.error);
-      result.error.dispose();
       const isError = thrown !== null && typeof thrown === "object" && "message" in thrown;
       const name = isError ? ("name" in thrown ? String(thrown.name) : "Error") : undefined;
       const message = isError ? String(thrown.message) : (JSON.stringify(thrown) ?? String(thrown));
       if (name === "InternalError" && message === "interrupted") {
+        result.error.dispose();
         throw new TransformFailure("timeout", `transform exceeded ${timeoutMs}ms time limit`);
       }
       // "string too long" is QuickJS's hard string-size cap (e.g. `s += s` doubling): an allocation failure.
       if (name === "InternalError" && (message === "out of memory" || message === "string too long")) {
+        result.error.dispose();
         throw new TransformFailure("memory", `transform exceeded ${memoryBytes} byte memory limit (${message})`);
       }
+      let byTransform = false;
+      if (isTransformThrown) {
+        const verdict = ctx.callFunction(isTransformThrown, ctx.undefined, result.error);
+        if (verdict.error) {
+          // Can't tell: hide the message rather than risk showing data.
+          verdict.error.dispose();
+          byTransform = true;
+        } else {
+          byTransform = ctx.dump(verdict.value) === true;
+          verdict.value.dispose();
+        }
+      }
+      result.error.dispose();
       const kind = name === "SyntaxError" ? "syntax" : "runtime";
-      throw new TransformFailure(kind, name ? `${name}: ${message}` : `uncaught exception: ${message}`);
+      // A transform-chosen `name` could carry data too; only standard names are reported as-is.
+      const thrownName = !byTransform ? undefined : name === undefined ? "uncaught exception" : ERROR_NAMES.includes(name) ? name : "Error";
+      throw new TransformFailure(kind, name ? `${name}: ${message}` : `uncaught exception: ${message}`, thrownName);
     };
 
     const std = unwrap(ctx.evalCode(STD_SOURCE, "std.js"));
     const serialize = unwrap(ctx.evalCode(SERIALIZE_SOURCE, "serialize.js"));
+    isTransformThrown = ctx.getProp(serialize, "isTransformThrown");
+    handles.push(isTransformThrown);
     const parse = unwrap(ctx.evalCode("JSON.parse", "parse.js"));
+
     const [sourcesHandle, inputsHandle] = [sourcesJson, inputsJson].map((json) => {
       const text = ctx.newString(json);
       handles.push(text);
@@ -175,7 +237,9 @@ async function runInFreshVm(
     }
     return { ok: true, output: checked.data };
   } catch (error) {
-    if (error instanceof TransformFailure) return fail(error.kind, error.message);
+    if (error instanceof TransformFailure) {
+      return { ok: false, error: { kind: error.kind, message: error.message, ...(error.thrown ? { thrown: error.thrown } : {}) } };
+    }
     throw error;
   } finally {
     // May throw (WASM abort on leaked objects); runTransform turns that into a failure result.

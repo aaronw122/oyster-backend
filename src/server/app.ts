@@ -42,7 +42,8 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   app.route("/pearls", pearlsRoutes(deps));
   app.route("/pearls", dataRoutes(deps));
   app.route("/messages", messagesRoutes(deps));
-  // Unauthenticated: identity comes from the signed, single-use OAuth `state`.
+  // /start and /callback are unauthenticated (identity comes from the signed, single-use
+  // OAuth `state`); /oauth/:provider/link applies requireAuth itself.
   if (deps.oauth) app.route("/oauth", oauthRoutes({ ...deps, oauth: deps.oauth }));
 
   app.notFound((c) => apiError(c, 404, "not_found", "Route not found."));

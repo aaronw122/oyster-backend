@@ -17,7 +17,9 @@ const oauth = { providers, tokens: new OAuthTokenStore(db, config.tokenEncryptio
 const runtime: RuntimeDeps = {
   pearls,
   authResolverFor: (userId) => oauth.tokens.resolverFor(userId),
+  apiOrigins: (provider) => providers.get(provider)?.apiOrigins,
   cache: createMemorySourceCache(),
+  maxSourceBytes: config.maxSourceBytes,
   sandboxTimeoutMs: config.sandboxTimeoutMs,
 };
 const agent: AgentServices = {

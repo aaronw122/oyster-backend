@@ -9,6 +9,8 @@ export type StoredToken = { accessToken: string; refreshToken?: string; expiresA
 export interface OAuthProviderAdapter {
   id: string;
   displayName: string;
+  /** The https origins of the provider's data API; its tokens are sent nowhere else. */
+  apiOrigins: readonly string[];
   authorizeUrl(ctx: { state: string; redirectUri: string; codeVerifier?: string }): Promise<string>;
   exchange(ctx: { query: URLSearchParams; redirectUri: string; codeVerifier?: string }): Promise<StoredToken>;
   refresh?(token: StoredToken): Promise<StoredToken>;

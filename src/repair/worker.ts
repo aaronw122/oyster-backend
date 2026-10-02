@@ -40,7 +40,9 @@ export function createRepairer(services: AgentServices, opts: { model?: Language
     const sensitive = ctx.sensitive || isSensitive(pearl, runtime);
     const probe = await fetchSources(pearl, {
       resolveAuth: runtime.authResolverFor(pearl.userId),
+      apiOrigins: runtime.apiOrigins,
       fetch: runtime.fetch,
+      maxBytes: runtime.maxSourceBytes,
       cache: runtime.cache,
       resolveHost: runtime.resolveHost,
       builtins: runtime.builtins,

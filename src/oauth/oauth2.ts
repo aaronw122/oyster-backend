@@ -5,6 +5,8 @@ import { OAuthError, type OAuthProviderAdapter, type StoredToken } from "./types
 export type OAuth2Config = {
   id: string;
   displayName: string;
+  /** https origins of the provider's data API (e.g. `https://api.github.com`); tokens are sent only there. */
+  apiOrigins: readonly string[];
   authorizeEndpoint: string;
   tokenEndpoint: string;
   clientId: string;
@@ -34,6 +36,11 @@ export function codeChallenge(verifier: string): string {
 
 /** Authorization-code adapter for a standard OAuth 2.0 provider. */
 export function oauth2Adapter(cfg: OAuth2Config): OAuthProviderAdapter {
+  for (const origin of cfg.apiOrigins) {
+    if (!origin.startsWith("https://") || new URL(origin).origin !== origin) {
+      throw new Error(`oauth2Adapter(${cfg.id}): apiOrigins entry "${origin}" must be a bare https origin`);
+    }
+  }
   const doFetch = cfg.fetch ?? fetch;
   const now = cfg.now ?? Date.now;
   const pkce = cfg.pkce ?? true;
@@ -68,6 +75,7 @@ export function oauth2Adapter(cfg: OAuth2Config): OAuthProviderAdapter {
   return {
     id: cfg.id,
     displayName: cfg.displayName,
+    apiOrigins: cfg.apiOrigins,
 
     async authorizeUrl({ state, redirectUri, codeVerifier }) {
       const url = new URL(cfg.authorizeEndpoint);

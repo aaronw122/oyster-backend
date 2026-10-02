@@ -3,11 +3,13 @@ import { z } from "zod";
 import type { PearlSource } from "../contract/index.ts";
 import type { Builtin } from "./builtins.ts";
 import {
+  type ApiOriginsLookup,
   type AuthResolver,
   createMemorySourceCache,
   type FetchSourcesDeps,
   fetchSources,
   fillTemplate,
+  guardedGet,
   type HostResolver,
   SourceError,
 } from "./index.ts";
@@ -30,6 +32,8 @@ function fakeFetch(respond: (url: string) => Response | Promise<Response> = () =
 const publicDns: HostResolver = async () => ["203.0.113.10"];
 const noAuth: AuthResolver = async () => null;
 const withToken: AuthResolver = async (provider) => ({ provider, accessToken: TOKEN });
+const API_ORIGINS: Record<string, string[]> = { plaid: ["https://api.test", "https://x.test"], p: ["https://x.test", "https://a.test"] };
+const apiOrigins: ApiOriginsLookup = (provider) => API_ORIGINS[provider];
 
 function urlSource(url: string, extra: Partial<PearlSource> = {}): PearlSource {
   return { id: "s", url, method: "GET", ...extra };
@@ -93,6 +97,7 @@ describe("fetchSources: URL sources", () => {
           requested.push(provider);
           return { provider, accessToken: TOKEN };
         },
+        apiOrigins,
         fetch: fn,
       },
     );
@@ -105,7 +110,7 @@ describe("fetchSources: URL sources", () => {
     const { fn, calls } = fakeFetch();
     const result = await fetchSources(
       { inputs: {}, sources: [urlSource("https://api.test/me", { auth: { provider: "plaid" } })] },
-      { resolveHost: publicDns, resolveAuth: noAuth, fetch: fn },
+      { resolveHost: publicDns, resolveAuth: noAuth, apiOrigins, fetch: fn },
     );
     expect(result).toMatchObject({ ok: false, error: { kind: "auth_missing" } });
     expect(calls).toHaveLength(0);
@@ -170,10 +175,74 @@ describe("fetchSources: URL sources", () => {
     });
     const result = await fetchSources(
       { inputs: {}, sources: [urlSource("https://x.test/", { auth: { provider: "plaid" } })] },
-      { resolveHost: publicDns, resolveAuth: withToken, fetch: fn },
+      { resolveHost: publicDns, resolveAuth: withToken, apiOrigins, fetch: fn },
     );
     expect(result.ok).toBe(false);
     expect(JSON.stringify(result)).not.toContain(TOKEN);
+  });
+});
+
+describe("fetchSources: credentials only go to the provider's API", () => {
+  test("an attacker host, plain http, look-alike origins and unknown providers are refused before the token is loaded", async () => {
+    const cases: Array<[url: string, provider: string, deps?: Partial<FetchSourcesDeps>]> = [
+      ["https://collector.attacker.example/steal", "plaid"],
+      ["http://api.test/me", "plaid"],
+      ["https://api.test.attacker.example/me", "plaid"],
+      ["https://api.test@attacker.example/me", "plaid"],
+      ["https://api.test:8443/me", "plaid"],
+      ["https://evil-api.test/me", "plaid"],
+      ["https://api.test/me", "myspace"],
+      ["https://api.test/me", "plaid", { apiOrigins: undefined }],
+    ];
+    for (const [url, provider, extra] of cases) {
+      const { fn, calls } = fakeFetch();
+      const resolved: string[] = [];
+      const result = await fetchSources(
+        { inputs: {}, sources: [urlSource(url, { auth: { provider } })] },
+        {
+          resolveHost: publicDns,
+          resolveAuth: async (p) => {
+            resolved.push(p);
+            return { provider: p, accessToken: TOKEN };
+          },
+          apiOrigins,
+          fetch: fn,
+          ...extra,
+        },
+      );
+      expect({ url, provider, result, resolved, calls }).toMatchObject({
+        url,
+        provider,
+        result: { ok: false, error: { kind: "forbidden_url" } },
+        resolved: [],
+        calls: [],
+      });
+    }
+  });
+
+  test("a refused credential (401/403) is auth_missing; a 401 the credential never reached is not", async () => {
+    for (const status of [401, 403]) {
+      const { fn } = fakeFetch(() => new Response("", { status }));
+      const result = await fetchSources(
+        { inputs: {}, sources: [urlSource("https://api.test/me", { auth: { provider: "plaid" } })] },
+        { resolveHost: publicDns, resolveAuth: withToken, apiOrigins, fetch: fn },
+      );
+      expect(result).toMatchObject({ ok: false, error: { kind: "auth_missing" } });
+    }
+
+    const anonymous = fakeFetch(() => new Response("", { status: 401 }));
+    const open = await fetchSources({ inputs: {}, sources: [urlSource("https://api.test/me")] }, { resolveHost: publicDns, resolveAuth: noAuth, fetch: anonymous.fn });
+    expect(open).toMatchObject({ ok: false, error: { kind: "http" } });
+
+    // The credential stays on the original origin, so a 401 after a cross-origin redirect isn't about it.
+    const redirected = fakeFetch((url) =>
+      url.startsWith("https://api.test/") ? new Response(null, { status: 302, headers: { Location: "https://cdn.test/me" } }) : new Response("", { status: 401 }),
+    );
+    const elsewhere = await fetchSources(
+      { inputs: {}, sources: [urlSource("https://api.test/me", { auth: { provider: "plaid" } })] },
+      { resolveHost: publicDns, resolveAuth: withToken, apiOrigins, fetch: redirected.fn },
+    );
+    expect(elsewhere).toMatchObject({ ok: false, error: { kind: "http" } });
   });
 });
 
@@ -291,14 +360,15 @@ describe("fetchSources: cache", () => {
     const source = urlSource("https://x.test/{inputs.q}", { auth: { provider: "p" } });
     const as = (accessToken: string): AuthResolver => async (provider) => ({ provider, accessToken });
 
-    await fetchSources({ inputs: { q: "a" }, sources: [source] }, { resolveHost: publicDns, resolveAuth: as("t1"), fetch: fn, cache });
-    await fetchSources({ inputs: { q: "b" }, sources: [source] }, { resolveHost: publicDns, resolveAuth: as("t1"), fetch: fn, cache });
-    await fetchSources({ inputs: { q: "a" }, sources: [source] }, { resolveHost: publicDns, resolveAuth: as("t2"), fetch: fn, cache });
-    await fetchSources({ inputs: { q: "a" }, sources: [source] }, { resolveHost: publicDns, resolveAuth: as("t1"), fetch: fn, cache });
+    const deps = (accessToken: string): FetchSourcesDeps => ({ resolveHost: publicDns, resolveAuth: as(accessToken), apiOrigins, fetch: fn, cache });
+    await fetchSources({ inputs: { q: "a" }, sources: [source] }, deps("t1"));
+    await fetchSources({ inputs: { q: "b" }, sources: [source] }, deps("t1"));
+    await fetchSources({ inputs: { q: "a" }, sources: [source] }, deps("t2"));
+    await fetchSources({ inputs: { q: "a" }, sources: [source] }, deps("t1"));
     expect(calls).toHaveLength(3);
 
-    await fetchSources({ inputs: { q: "fail" }, sources: [source] }, { resolveHost: publicDns, resolveAuth: as("t1"), fetch: fn, cache });
-    await fetchSources({ inputs: { q: "fail" }, sources: [source] }, { resolveHost: publicDns, resolveAuth: as("t1"), fetch: fn, cache });
+    await fetchSources({ inputs: { q: "fail" }, sources: [source] }, deps("t1"));
+    await fetchSources({ inputs: { q: "fail" }, sources: [source] }, deps("t1"));
     expect(calls).toHaveLength(5);
   });
 });
@@ -365,7 +435,7 @@ describe("fetchSources: SSRF guard", () => {
     const run = (url: string) =>
       fetchSources(
         { inputs: {}, sources: [urlSource(url, { auth: { provider: "p" } })] },
-        { resolveHost, resolveAuth: withToken, fetch: fn },
+        { resolveHost, resolveAuth: withToken, apiOrigins, fetch: fn },
       );
 
     expect(await run("https://a.test/start")).toEqual({ ok: true, data: { s: { done: true } } });
@@ -404,5 +474,50 @@ describe("fetchSources: SSRF guard", () => {
     );
     expect(result).toMatchObject({ ok: false, error: { kind: "http" } });
     expect(calls).toHaveLength(4);
+  });
+});
+
+describe("guardedGet: response size cap", () => {
+  const CHUNK = 1024;
+  /** A body of `chunks` × 1 KiB, produced only on demand, that counts the bytes the reader pulled. */
+  function streamingFetch(chunks: number, headers: Record<string, string> = {}) {
+    const pulled = { bytes: 0 };
+    const fn = (async () => {
+      let sent = 0;
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            if (sent++ === chunks) return controller.close();
+            pulled.bytes += CHUNK;
+            controller.enqueue(new Uint8Array(CHUNK).fill(0x61));
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      return new Response(body, { status: 200, headers: { "content-type": "text/plain", ...headers } });
+    }) as unknown as typeof fetch;
+    return { fn, pulled };
+  }
+  const get = (fn: typeof fetch, maxBytes: number) =>
+    guardedGet("https://docs.test/big", null, { fetch: fn, resolveHost: publicDns, maxBytes }, "text/plain");
+
+  test("a declared Content-Length over the cap is refused without reading the body", async () => {
+    const { fn, pulled } = streamingFetch(64, { "content-length": String(64 * CHUNK) });
+    const error = await get(fn, 10 * CHUNK).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SourceError);
+    expect((error as SourceError).kind).toBe("too_large");
+    expect(pulled.bytes).toBe(0);
+  });
+
+  test("an undeclared stream is cut off once it passes the cap", async () => {
+    const { fn, pulled } = streamingFetch(1_000);
+    const error = await get(fn, 10 * CHUNK + 1).catch((e: unknown) => e);
+    expect((error as SourceError).kind).toBe("too_large");
+    expect(pulled.bytes).toBeLessThanOrEqual(10 * CHUNK + 1 + CHUNK);
+  });
+
+  test("a body within the cap is returned whole", async () => {
+    const { fn } = streamingFetch(10);
+    expect((await get(fn, 10 * CHUNK)).text).toBe("a".repeat(10 * CHUNK));
   });
 });

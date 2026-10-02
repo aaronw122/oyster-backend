@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
-import { beforeEach, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import type { Hono } from "hono";
-import { ApiErrorSchema } from "../contract/index.ts";
+import { ApiErrorSchema, OAuthLinkResponseSchema } from "../contract/index.ts";
 import { loadConfig } from "../config.ts";
 import { openDb } from "../db/index.ts";
 import {
@@ -25,6 +25,7 @@ let db: Database;
 let app: Hono<AppEnv>;
 let tokens: OAuthTokenStore;
 let now: number;
+let aliceToken: string;
 let tokenRequests: URLSearchParams[];
 let tokenResponse: { status: number; json: unknown };
 
@@ -32,6 +33,7 @@ function adapter(id: string): OAuthProviderAdapter {
   return oauth2Adapter({
     id,
     displayName: id,
+    apiOrigins: [`https://api.${id}.example`],
     authorizeEndpoint: `https://${id}.example/authorize`,
     tokenEndpoint: `https://${id}.example/token`,
     clientId: `${id}-client`,
@@ -48,7 +50,7 @@ function adapter(id: string): OAuthProviderAdapter {
 beforeEach(() => {
   db = openDb(":memory:");
   const users = new UserStore(db);
-  users.issueToken("alice");
+  aliceToken = users.issueToken("alice");
   now = T0;
   tokenRequests = [];
   tokenResponse = { status: 200, json: { access_token: "provider-access-token", refresh_token: "provider-refresh", expires_in: 3600 } };
@@ -124,7 +126,7 @@ test("callback from a browser that didn't run /start is rejected and stores noth
   expect((await callback("github", { code: "c", state })).params.code).toBe("invalid_state");
   expect((await callback("github", { code: "c", state }, `${cookieName}=forged-value`)).params.code).toBe("invalid_state");
   expect(tokenRequests).toHaveLength(0);
-  expect(tokens.has("alice", "github")).toBe(false);
+  expect(await tokens.get("alice", "github")).toBeNull();
 
   // The failed attempts didn't burn the nonce: the real browser still completes.
   expect((await callback("github", { code: "c", state }, cookie)).params.status).toBe("ok");
@@ -163,7 +165,7 @@ test("tampered, expired and unknown states are rejected without a token exchange
   expect(locationCode(await app.request(pathOf(createOAuthStartUrl(config, "alice", "github", T0))))).toBe("state_expired");
 
   expect(tokenRequests).toHaveLength(0);
-  expect(tokens.has("alice", "github")).toBe(false);
+  expect(await tokens.get("alice", "github")).toBeNull();
 });
 
 test("a state for one provider can't be used with another", async () => {
@@ -176,7 +178,7 @@ test("a state for one provider can't be used with another", async () => {
     status: "error",
     code: "provider_mismatch",
   });
-  expect(tokens.has("alice", "spotify")).toBe(false);
+  expect(await tokens.get("alice", "spotify")).toBeNull();
 });
 
 test("provider denial and failed exchanges redirect with a code and leak nothing", async () => {
@@ -189,7 +191,7 @@ test("provider denial and failed exchanges redirect with a code and leak nothing
   expect(params.code).toBe("exchange_failed");
   expect(location).not.toContain("provider-access-token");
   expect(location).not.toContain("github-secret");
-  expect(tokens.has("alice", "github")).toBe(false);
+  expect(await tokens.get("alice", "github")).toBeNull();
 });
 
 test("unknown or disabled providers are a 404 JSON error", async () => {
@@ -202,8 +204,44 @@ test("unknown or disabled providers are a 404 JSON error", async () => {
   }
 });
 
-test("OAuth routes need no bearer token", async () => {
+test("/start and /callback need no bearer token", async () => {
   const res = await app.request(pathOf(createOAuthStartUrl(config, "alice", "github", now)));
   expect(res.status).toBe(302);
   expect(res.headers.get("location")).toStartWith("https://github.example/authorize");
+});
+
+describe("POST /oauth/:provider/link", () => {
+  const link = (provider: string, token?: string) =>
+    app.request(`/oauth/${provider}/link`, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {} });
+
+  test("needs a valid bearer token", async () => {
+    for (const token of [undefined, "not-a-real-token"]) {
+      const res = await link("github", token);
+      expect(res.status).toBe(401);
+      expect(ApiErrorSchema.parse(await res.json()).error.code).toBe("unauthorized");
+    }
+  });
+
+  test("unknown or disabled providers are a 404 unknown_provider", async () => {
+    const res = await link("strava", aliceToken);
+    expect(res.status).toBe(404);
+    expect(ApiErrorSchema.parse(await res.json()).error.code).toBe("unknown_provider");
+  });
+
+  test("returns a fresh start URL for the caller that works exactly once", async () => {
+    const res = await link("github", aliceToken);
+    expect(res.status).toBe(200);
+    const { url } = OAuthLinkResponseSchema.parse(await res.json());
+    expect(url).toStartWith("https://oyster.test/oauth/github/start?state=");
+
+    const { state, cookie } = await start(url);
+    expect(locationCode(await app.request(pathOf(url)))).toBe("state_reused");
+    expect((await callback("github", { code: "c", state }, cookie)).params.status).toBe("ok");
+    expect(await tokens.get("alice", "github")).toEqual({ provider: "github", accessToken: "provider-access-token" });
+
+    // Each call mints a new single-use link, so a reopened sign-in isn't stuck on a burned one.
+    const again = OAuthLinkResponseSchema.parse(await (await link("github", aliceToken)).json()).url;
+    expect(again).not.toBe(url);
+    expect((await app.request(pathOf(again))).headers.get("location")).toStartWith("https://github.example/authorize");
+  });
 });

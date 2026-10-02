@@ -1,7 +1,9 @@
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import type { OAuthLinkResponse } from "../../contract/index.ts";
 import {
   createCodeVerifier,
+  createOAuthStartUrl,
   OAuthError,
   type OAuthDeps,
   type OAuthErrorCode,
@@ -11,6 +13,7 @@ import {
   verifyState,
 } from "../../oauth/index.ts";
 import type { AppDeps, AppEnv } from "../app.ts";
+import { requireAuth } from "../auth.ts";
 import { apiError } from "../errors.ts";
 
 const COOKIE_PATH = "/oauth";
@@ -22,8 +25,12 @@ const COOKIE_PATH = "/oauth";
  * browser with an HttpOnly cookie; /callback requires that same cookie. Every
  * outcome after provider lookup redirects back to the app, so
  * `ASWebAuthenticationSession` always completes.
+ *
+ * `POST /oauth/:provider/link` is the exception: it needs the app's bearer token
+ * and mints a fresh start URL for that user (start URLs are single-use, so the
+ * app asks for a new one whenever it reopens a sign-in).
  */
-export function oauthRoutes({ config, db, oauth }: AppDeps & { oauth: OAuthDeps }): Hono<AppEnv> {
+export function oauthRoutes({ config, db, oauth, users }: AppDeps & { oauth: OAuthDeps }): Hono<AppEnv> {
   const nonces = new OAuthNonceStore(db);
   const now = oauth.now ?? Date.now;
   // Plain-http cookies only for local development.
@@ -35,6 +42,12 @@ export function oauthRoutes({ config, db, oauth }: AppDeps & { oauth: OAuthDeps 
   };
 
   return new Hono<AppEnv>()
+    .post("/:provider/link", requireAuth(users), (c) => {
+      const provider = c.req.param("provider");
+      if (!oauth.providers.has(provider)) return apiError(c, 404, "unknown_provider", "That sign-in option isn't available.");
+      const body: OAuthLinkResponse = { url: createOAuthStartUrl(config, c.get("userId"), provider, now()) };
+      return c.json(body);
+    })
     .get("/:provider/start", async (c) => {
       const provider = c.req.param("provider");
       const adapter = oauth.providers.get(provider);

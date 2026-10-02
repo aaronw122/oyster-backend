@@ -204,8 +204,8 @@ describe("repair", () => {
     await refresh(queue, pearl, ["small"]);
     const told = modelVisible(model);
     // The repair message and the test_pearl result both name the error but hide its text.
-    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain("threw Error (message hidden)");
-    expect(JSON.stringify(toolResultsSeen(model, "test_pearl"))).toContain("threw Error (message hidden)");
+    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain("Error (message hidden)");
+    expect(JSON.stringify(toolResultsSeen(model, "test_pearl"))).toContain("Error (message hidden)");
     for (const value of ["Ada", "Lovelace"]) expect(told).not.toContain(value);
   });
 

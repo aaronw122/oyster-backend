@@ -17,16 +17,9 @@ export type DraftPearl = Pick<Pearl, "sources" | "inputs" | "transform">;
  * Why a run failed. `message` is plain language for people (no JSON, endpoints,
  * or code). `detail` is the technical cause for logs; it never contains
  * credentials (fetchSources redacts tokens). Model-visible text goes through
- * `modelSafeDetail`. `thrown` names the error a transform threw itself (its
- * message is the transform's own text and may carry data values).
+ * `modelSafeDetail`.
  */
-export type RunFailure = {
-  stage: "fetch" | "transform" | "fit";
-  message: string;
-  detail: string;
-  sizes?: Size[];
-  thrown?: string;
-};
+export type RunFailure = { stage: "fetch" | "transform" | "fit"; message: string; detail: string; sizes?: Size[] };
 
 /** A failed run. `output` is the raw transform output when only the fit stage failed, so the agent can see what overflowed. */
 export type DraftRun =
@@ -85,14 +78,13 @@ export async function execute(userId: string, draft: DraftPearl, deps: RuntimeDe
 
   const transformed = await runTransform(draft.transform, fetched.data, draft.inputs, { timeoutMs: deps.sandboxTimeoutMs });
   if (!transformed.ok) {
-    const { kind, message, thrown } = transformed.error;
+    const { kind, message } = transformed.error;
     return {
       ok: false,
       failure: {
         stage: "transform",
         message: "The widget couldn't make sense of the latest data.",
         detail: `transform failed (${kind}): ${message}`,
-        ...(thrown ? { thrown } : {}),
       },
     };
   }

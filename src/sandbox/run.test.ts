@@ -57,27 +57,6 @@ describe("runTransform", () => {
     expect(message).toBe("uncaught exception: null");
   });
 
-  test("errors the transform throws are marked; errors the engine raises are not", async () => {
-    const data = { v: { name: "Ada Lovelace", notes: null } };
-    const thrownBy = async (transform: string) => {
-      const result = await runTransform(transform, data, {});
-      if (result.ok) throw new Error("expected a failure");
-      return result.error.thrown;
-    };
-    expect(await thrownBy(`(s) => { throw new Error("no note for " + s.v.name) }`)).toBe("Error");
-    expect(await thrownBy(`(s) => { throw TypeError(s.v.name) }`)).toBe("TypeError");
-    expect(await thrownBy(`(s) => { throw s.v.name }`)).toBe("uncaught exception");
-    // Recovering an engine error's constructor still builds a marked error.
-    expect(await thrownBy(`(s) => { let C; try { null.x } catch (e) { C = e.constructor } throw new C(s.v.name) }`)).toBe("TypeError");
-    // A custom name can't smuggle data out through the reported name.
-    expect(await thrownBy(`(s) => { const e = new Error("x"); e.name = s.v.name; throw e }`)).toBe("Error");
-    expect(await thrownBy(`(s) => ({ value: "x", toJSON() { throw new Error(s.v.name) } })`)).toBe("Error");
-
-    expect(await thrownBy(`(s) => ({ value: s.v.notes.trim() })`)).toBeUndefined();
-    expect(await thrownBy(`(s) => ({ value: JSON.parse(s.v.name) })`)).toBeUndefined();
-    expect(await thrownBy(`(s) => { try { null.x } catch (e) { throw e } }`)).toBeUndefined();
-  });
-
   test("runaway recursion is a runtime error, not a host crash", async () => {
     const message = expectError(await runTransform(`() => { const f = (n) => f(n + 1) + 1; return f(0); }`, {}, {}), "runtime");
     expect(message).toContain("stack overflow");

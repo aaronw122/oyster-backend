@@ -7,7 +7,7 @@ import type { Builtin } from "../sources/builtins.ts";
 import { createMemorySourceCache } from "../sources/index.ts";
 import { PearlStore } from "../store/pearls.ts";
 import { UserStore } from "../store/users.ts";
-import { getPearlData, nullAuthResolverFor, type RunFailure, runDraft, type RuntimeDeps, savePearl } from "./index.ts";
+import { getPearlData, modelSafeDetail, nullAuthResolverFor, type RunFailure, runDraft, type RuntimeDeps, savePearl } from "./index.ts";
 
 type Payload = { value: string; sub?: string; items?: Array<{ label: string; value?: string }>; fail?: boolean };
 
@@ -321,5 +321,38 @@ describe("runDraft", () => {
     expect(result.failure.message).toContain("reconnect");
     expect(JSON.stringify(result)).not.toContain(token);
     expect(result.failure.message).not.toMatch(/https?:|401|[{}]/);
+  });
+});
+
+describe("modelSafeDetail", () => {
+  /** The model-visible detail of a real sandbox run of `body` over a visitor named Ada Lovelace. */
+  async function detailFor(body: string, sensitive: boolean) {
+    payload = { visitors: [{ id: 1, name: "Ada Lovelace", notes: null }] } as unknown as Payload;
+    const run = await runDraft("alice", { ...draft, transform: `(s) => { const v = s.w.visitors[0]; ${body} }` }, deps);
+    if (run.ok) throw new Error("expected a failure");
+    return modelSafeDetail(run.failure, sensitive);
+  }
+
+  test("a sensitive run hides any error text the transform could have written", async () => {
+    const leaks = [
+      `throw new Error("no note for " + v.name)`,
+      `try { null.x } catch (e) { e.message = "for " + v.name; throw e }`,
+      `throw new InternalError("for " + v.name)`,
+      `const e = Object.create(TypeError.prototype); e.message = "for " + v.name; throw e`,
+      `throw v.name`,
+      `const e = new Error("x"); e.name = v.name; throw e`,
+      `return { value: "x", toJSON() { throw new Error(v.name) } }`,
+    ];
+    for (const body of leaks) {
+      const detail = await detailFor(body, true);
+      expect({ body, detail }).toEqual({ body, detail: expect.stringContaining("(message hidden)") });
+      expect(detail).not.toMatch(/Ada|Lovelace/);
+    }
+  });
+
+  test("a sensitive run still shows masked engine errors; non-sensitive detail is untouched", async () => {
+    expect(await detailFor(`return { value: v.notes.trim() }`, true)).toBe('transform failed (runtime): TypeError: cannot read property "…" of null');
+    expect(await detailFor(`return { value: JSON.parse(v.name) }`, true)).toBe('transform failed (syntax): SyntaxError: unexpected token: "…"');
+    expect(await detailFor(`throw new Error("no note for " + v.name)`, false)).toBe("transform failed (runtime): Error: no note for Ada Lovelace");
   });
 });

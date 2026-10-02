@@ -276,7 +276,7 @@ describe("preview and save", () => {
       transform: `(s) => { const v = s.hub.visitors[0]; if (!v.notes) throw new Error("no note for " + v.name); return { value: v.notes }; }`,
     };
     const { model } = await turn([{ calls: [{ tool: "test_pearl", input: hub }] }, { text: "Hmm." }]);
-    expect(JSON.stringify(toolResultsSeen(model, "test_pearl"))).toContain("threw Error (message hidden)");
+    expect(JSON.stringify(toolResultsSeen(model, "test_pearl"))).toContain("Error (message hidden)");
     for (const value of ["Ada", "Lovelace"]) expect(modelVisible(model)).not.toContain(value);
   });
 });
